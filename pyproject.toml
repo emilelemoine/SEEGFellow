@@ -1,0 +1,11 @@
+[project]
+name = "seegfellow-dev"
+version = "0.0.0"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

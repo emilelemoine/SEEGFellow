@@ -49,8 +49,24 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         )
         self.ui.rerunRegistrationButton.clicked.connect(self._on_register_clicked)
 
-        # Step 4: Electrode Detection
+        # Step 4a: Intracranial Mask
+        self.ui.computeHeadMaskButton.clicked.connect(
+            self._on_compute_head_mask_clicked
+        )
+        self.ui.editHeadMaskButton.clicked.connect(self._on_edit_head_mask_clicked)
+        self.ui.acceptHeadMaskButton.clicked.connect(self._on_accept_head_mask_clicked)
+
+        # Step 4b: Metal Threshold
         self.ui.thresholdSlider.valueChanged.connect(self._on_threshold_changed)
+        self.ui.applyMetalThresholdButton.clicked.connect(
+            self._on_apply_metal_threshold_clicked
+        )
+        self.ui.editMetalMaskButton.clicked.connect(self._on_edit_metal_mask_clicked)
+        self.ui.acceptMetalMaskButton.clicked.connect(
+            self._on_accept_metal_mask_clicked
+        )
+
+        # Step 4c: Contact Detection
         self.ui.detectElectrodesButton.clicked.connect(
             self._on_detect_electrodes_clicked
         )
@@ -139,10 +155,35 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             slicer.util.errorDisplay(f"Registration failed: {e}")
 
     def _on_accept_registration_clicked(self):
-        self.ui.detectionCollapsibleButton.collapsed = False
+        self.ui.intracranialMaskCollapsibleButton.collapsed = False
 
     # -------------------------------------------------------------------------
-    # Step 4: Electrode Detection
+    # Step 4a: Intracranial Mask
+    # -------------------------------------------------------------------------
+
+    def _on_compute_head_mask_clicked(self):
+        try:
+            slicer.util.showStatusMessage("Computing intracranial mask...")
+            self.logic.run_intracranial_mask()
+            slicer.util.showStatusMessage("Intracranial mask computed.")
+        except Exception as e:
+            slicer.util.errorDisplay(f"Failed to compute head mask: {e}")
+
+    def _on_edit_head_mask_clicked(self):
+        if self.logic._segmentation_node is None:
+            slicer.util.errorDisplay("Run 'Compute Intracranial Mask' first.")
+            return
+        slicer.util.selectModule("SegmentEditor")
+        editor_widget = slicer.modules.segmenteditor.widgetRepresentation().self()
+        editor_widget.setSegmentationNode(self.logic._segmentation_node)
+        editor_widget.setSourceVolumeNode(self.logic._ct_node)
+
+    def _on_accept_head_mask_clicked(self):
+        self.ui.metalThresholdCollapsibleButton.collapsed = False
+        slicer.util.showStatusMessage("Head mask accepted.")
+
+    # -------------------------------------------------------------------------
+    # Step 4b: Metal Threshold
     # -------------------------------------------------------------------------
 
     def _on_threshold_changed(self, value: float) -> None:
@@ -157,11 +198,38 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         count = int(np.sum(ct_array >= value))
         self.ui.voxelCountLabel.setText(f"{count:,} voxels above threshold")
 
-    def _on_detect_electrodes_clicked(self):
+    def _on_apply_metal_threshold_clicked(self):
         threshold = self.ui.thresholdSlider.value
         try:
+            slicer.util.showStatusMessage("Applying metal threshold...")
+            self.logic.run_metal_threshold(threshold)
+            slicer.util.showStatusMessage("Metal threshold applied.")
+        except Exception as e:
+            slicer.util.errorDisplay(f"Failed to apply threshold: {e}")
+
+    def _on_edit_metal_mask_clicked(self):
+        if self.logic._segmentation_node is None:
+            slicer.util.errorDisplay("Run 'Apply Threshold' first.")
+            return
+        slicer.util.selectModule("SegmentEditor")
+        editor_widget = slicer.modules.segmenteditor.widgetRepresentation().self()
+        editor_widget.setSegmentationNode(self.logic._segmentation_node)
+        editor_widget.setSourceVolumeNode(self.logic._ct_node)
+
+    def _on_accept_metal_mask_clicked(self):
+        self.ui.contactDetectionCollapsibleButton.collapsed = False
+        slicer.util.showStatusMessage("Metal mask accepted.")
+
+    # -------------------------------------------------------------------------
+    # Step 4c: Contact Detection
+    # -------------------------------------------------------------------------
+
+    def _on_detect_electrodes_clicked(self):
+        threshold = self.ui.thresholdSlider.value
+        sigma = self.ui.sigmaSlider.value
+        try:
             slicer.util.showStatusMessage("Detecting electrodes...")
-            self.logic.run_electrode_detection(threshold)
+            self.logic.run_electrode_detection(threshold, sigma=sigma)
             self._populate_electrode_table()
             slicer.util.showStatusMessage(
                 f"Detected {len(self.logic.electrodes)} electrode(s)."

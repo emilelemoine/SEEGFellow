@@ -50,17 +50,57 @@
     </widget>
    </item>
 
-   <!-- Step 4: Electrode Detection -->
+   <!-- Step 4a: Intracranial Mask -->
    <item>
-    <widget class="ctkCollapsibleButton" name="detectionCollapsibleButton">
-     <property name="text"><string>Step 4: Electrode Detection</string></property>
+    <widget class="ctkCollapsibleButton" name="intracranialMaskCollapsibleButton">
+     <property name="text"><string>Step 4a: Intracranial Mask</string></property>
      <property name="collapsed"><bool>true</bool></property>
-     <layout class="QVBoxLayout" name="detectionLayout">
+     <layout class="QVBoxLayout" name="intracranialMaskLayout">
+      <item><widget class="QPushButton" name="computeHeadMaskButton"><property name="text"><string>Compute Intracranial Mask</string></property></widget></item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item><widget class="QPushButton" name="editHeadMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
+        <item><widget class="QPushButton" name="acceptHeadMaskButton"><property name="text"><string>Accept</string></property></widget></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 4b: Metal Threshold -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="metalThresholdCollapsibleButton">
+     <property name="text"><string>Step 4b: Metal Threshold</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="metalThresholdLayout">
       <item>
        <layout class="QFormLayout">
         <item row="0" column="0"><widget class="QLabel"><property name="text"><string>HU Threshold:</string></property></widget></item>
         <item row="0" column="1"><widget class="ctkSliderWidget" name="thresholdSlider"><property name="minimum"><double>500</double></property><property name="maximum"><double>4000</double></property><property name="value"><double>2500</double></property><property name="singleStep"><double>50</double></property></widget></item>
         <item row="1" column="1"><widget class="QLabel" name="voxelCountLabel"><property name="text"><string>—</string></property></widget></item>
+       </layout>
+      </item>
+      <item><widget class="QPushButton" name="applyMetalThresholdButton"><property name="text"><string>Apply Threshold</string></property></widget></item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item><widget class="QPushButton" name="editMetalMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
+        <item><widget class="QPushButton" name="acceptMetalMaskButton"><property name="text"><string>Accept</string></property></widget></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 4c: Contact Detection (LoG) -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="contactDetectionCollapsibleButton">
+     <property name="text"><string>Step 4c: Detect Contacts (LoG)</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="contactDetectionLayout">
+      <item>
+       <layout class="QFormLayout">
+        <item row="0" column="0"><widget class="QLabel"><property name="text"><string>Sigma (mm):</string></property></widget></item>
+        <item row="0" column="1"><widget class="ctkSliderWidget" name="sigmaSlider"><property name="minimum"><double>0.5</double></property><property name="maximum"><double>3.0</double></property><property name="value"><double>1.2</double></property><property name="singleStep"><double>0.1</double></property></widget></item>
        </layout>
       </item>
       <item><widget class="QPushButton" name="detectElectrodesButton"><property name="text"><string>Detect All Electrodes</string></property></widget></item>

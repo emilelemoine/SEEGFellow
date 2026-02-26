@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 /sample_data/
 .DS_Store
+.worktrees/

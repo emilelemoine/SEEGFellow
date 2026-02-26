@@ -79,3 +79,46 @@ def cleanup_metal_mask(
         result[component] = 1
 
     return result
+
+
+class MetalSegmenter:
+    """Slicer wrapper: segments metal from a CT volume node.
+
+    Example (in Slicer Python console)::
+
+        segmenter = MetalSegmenter()
+        metal_labelmap = segmenter.segment(ct_volume_node, threshold=2500)
+    """
+
+    def segment(self, ct_volume_node, threshold: float = 2500):
+        """Threshold CT and clean up to isolate metal voxels.
+
+        Args:
+            ct_volume_node: vtkMRMLScalarVolumeNode with the CT data.
+            threshold: HU threshold for metal.
+
+        Returns:
+            vtkMRMLLabelMapVolumeNode containing the metal mask.
+        """
+        import slicer
+        from slicer.util import arrayFromVolume, updateVolumeFromArray
+
+        ct_array = arrayFromVolume(ct_volume_node)
+        mask = threshold_volume(ct_array, threshold)
+        cleaned = cleanup_metal_mask(mask)
+
+        # Create output labelmap node
+        labelmap_node = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLLabelMapVolumeNode", "MetalSegmentation"
+        )
+        # Copy geometry from CT
+        labelmap_node.CopyOrientation(ct_volume_node)
+
+        # Use a volumes logic to copy the volume properties
+        volumes_logic = slicer.modules.volumes.logic()
+        volumes_logic.CreateLabelVolumeFromVolume(
+            slicer.mrmlScene, labelmap_node, ct_volume_node
+        )
+
+        updateVolumeFromArray(labelmap_node, cleaned)
+        return labelmap_node

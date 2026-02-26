@@ -12,34 +12,6 @@ from scipy import ndimage
 from SEEGFellowLib.electrode_model import Contact, Electrode, ElectrodeParams
 
 
-def extract_metal_coords(
-    mask: np.ndarray,
-    spacing: tuple[float, float, float],
-    origin: tuple[float, float, float],
-) -> np.ndarray:
-    """Convert binary mask voxels to RAS coordinates.
-
-    Args:
-        mask: Binary 3D array (IJK indexing).
-        spacing: Voxel size in mm (I, J, K).
-        origin: Volume origin in RAS.
-
-    Returns:
-        (N, 3) array of RAS coordinates.
-
-    Example::
-
-        coords = extract_metal_coords(mask, spacing=(0.5, 0.5, 0.5), origin=(0, 0, 0))
-    """
-    ijk = np.argwhere(mask > 0).astype(float)  # shape (N, 3)
-    if len(ijk) == 0:
-        return np.empty((0, 3))
-    # Convert IJK to RAS (assuming RAS-aligned volume for simplicity;
-    # full IJK-to-RAS transform handled in the Slicer wrapper)
-    ras = ijk * np.array(spacing) + np.array(origin)
-    return ras
-
-
 def cluster_into_electrodes(
     coords: np.ndarray,
     distance_threshold: float = 10.0,
@@ -114,52 +86,6 @@ def fit_electrode_axis(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     direction = vh[0]  # first principal component
     direction /= np.linalg.norm(direction)
     return center, direction
-
-
-def detect_contacts_along_axis(
-    projections: np.ndarray,
-    expected_spacing: float = 3.5,
-    bin_width: float = 0.5,
-    min_peak_height_fraction: float = 0.3,
-) -> np.ndarray:
-    """Detect contact positions from 1D projected metal voxel positions.
-
-    Builds a density histogram along the electrode axis and finds peaks
-    corresponding to individual contacts.
-
-    Args:
-        projections: 1D array of voxel positions projected onto the electrode axis.
-        expected_spacing: Expected contact spacing in mm.
-        bin_width: Histogram bin width in mm.
-        min_peak_height_fraction: Minimum peak height as fraction of max peak.
-
-    Returns:
-        1D array of contact positions along the axis (sorted).
-
-    Example::
-
-        peaks = detect_contacts_along_axis(projected_positions, expected_spacing=3.5)
-    """
-    from scipy.signal import find_peaks
-
-    if len(projections) == 0:
-        return np.array([])
-
-    # Build density histogram
-    proj_min = projections.min() - expected_spacing
-    proj_max = projections.max() + expected_spacing
-    bins = np.arange(proj_min, proj_max + bin_width, bin_width)
-    hist, bin_edges = np.histogram(projections, bins=bins)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-    # Find peaks with minimum distance based on expected spacing
-    min_distance = max(1, int(expected_spacing * 0.6 / bin_width))
-    min_height = hist.max() * min_peak_height_fraction
-
-    peaks_idx, _ = find_peaks(hist, distance=min_distance, height=min_height)
-    peak_positions = bin_centers[peaks_idx]
-
-    return np.sort(peak_positions)
 
 
 def merge_collinear_clusters(
@@ -468,17 +394,15 @@ class ElectrodeDetector:
         from SEEGFellowLib.metal_segmenter import (
             compute_head_mask,
             threshold_volume,
-            cleanup_metal_mask,
         )
 
         ct_array = arrayFromVolume(ct_volume_node)
         head_mask = compute_head_mask(ct_array)
-        metal_mask = threshold_volume(ct_array, threshold)
-        cleaned = cleanup_metal_mask(metal_mask, head_mask=head_mask)
+        metal_mask = threshold_volume(ct_array, threshold) & head_mask
 
         ijk_to_ras = self._get_ijk_to_ras_matrix(ct_volume_node)
 
-        ijk_coords = np.argwhere(cleaned > 0).astype(float)
+        ijk_coords = np.argwhere(metal_mask > 0).astype(float)
         if len(ijk_coords) == 0:
             return []
 

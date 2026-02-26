@@ -2,7 +2,6 @@ from SEEGFellowLib.electrode_model import Contact, Electrode, ElectrodeParams
 from SEEGFellowLib.metal_segmenter import (
     compute_head_mask,
     threshold_volume,
-    cleanup_metal_mask,
 )
 from SEEGFellowLib.registration import CTtoT1Registration
 from SEEGFellowLib.electrode_detector import ElectrodeDetector

@@ -160,3 +160,263 @@ def detect_contacts_along_axis(
     peak_positions = bin_centers[peaks_idx]
 
     return np.sort(peak_positions)
+
+
+def merge_collinear_clusters(
+    clusters: list[np.ndarray],
+    angle_tolerance: float = 10.0,
+    max_gap_mm: float = 30.0,
+) -> list[np.ndarray]:
+    """Merge clusters that share a collinear trajectory (fragments of a gapped electrode).
+
+    Args:
+        clusters: List of (N, 3) coordinate arrays.
+        angle_tolerance: Maximum angle in degrees between axes to merge.
+        max_gap_mm: Maximum distance between closest points of two clusters to merge.
+
+    Returns:
+        List of (M, 3) arrays after merging.
+
+    Example::
+
+        merged = merge_collinear_clusters(clusters, angle_tolerance=10.0)
+    """
+    if len(clusters) <= 1:
+        return clusters
+
+    # Compute axis for each cluster
+    axes = []
+    centers = []
+    for cluster in clusters:
+        if len(cluster) < 3:
+            axes.append(None)
+            centers.append(cluster.mean(axis=0))
+        else:
+            center, direction = fit_electrode_axis(cluster)
+            axes.append(direction)
+            centers.append(center)
+
+    # Union-find for merging
+    parent = list(range(len(clusters)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    angle_threshold_rad = np.radians(angle_tolerance)
+
+    for i in range(len(clusters)):
+        if axes[i] is None:
+            continue
+        for j in range(i + 1, len(clusters)):
+            if axes[j] is None:
+                continue
+            # Check angle between axes
+            cos_angle = abs(np.dot(axes[i], axes[j]))
+            cos_angle = min(cos_angle, 1.0)
+            angle = np.arccos(cos_angle)
+            if angle > angle_threshold_rad:
+                continue
+
+            # Check distance: closest points between clusters
+            dist = np.linalg.norm(centers[i] - centers[j])
+            # Estimate extent of each cluster along its axis
+            proj_i = np.dot(clusters[i] - centers[i], axes[i])
+            proj_j = np.dot(clusters[j] - centers[j], axes[j])
+            extent_i = proj_i.max() - proj_i.min()
+            extent_j = proj_j.max() - proj_j.min()
+            # Gap is center-to-center minus half-extents
+            gap = dist - (extent_i + extent_j) / 2
+            if gap < max_gap_mm:
+                union(i, j)
+
+    # Build merged clusters
+    groups: dict[int, list[int]] = {}
+    for i in range(len(clusters)):
+        root = find(i)
+        groups.setdefault(root, []).append(i)
+
+    merged = []
+    for indices in groups.values():
+        merged.append(np.vstack([clusters[i] for i in indices]))
+
+    return merged
+
+
+def analyze_spacing(
+    contact_positions: np.ndarray,
+    gap_ratio_threshold: float = 1.8,
+) -> dict:
+    """Analyze inter-contact spacing to detect gaps.
+
+    Args:
+        contact_positions: Sorted 1D array of contact positions along axis.
+        gap_ratio_threshold: If (long spacing / short spacing) exceeds this,
+            classify as gapped electrode.
+
+    Returns:
+        Dict with keys: contact_spacing, has_gaps, gap_spacing, contacts_per_group.
+
+    Example::
+
+        info = analyze_spacing(np.array([0.0, 3.5, 7.0, 10.5, 24.5, 28.0]))
+    """
+    if len(contact_positions) < 2:
+        return {
+            "contact_spacing": 0.0,
+            "has_gaps": False,
+            "gap_spacing": None,
+            "contacts_per_group": None,
+        }
+
+    spacings = np.diff(contact_positions)
+    median_spacing = np.median(spacings)
+
+    # Check for bimodal spacing
+    short_mask = spacings < median_spacing * gap_ratio_threshold
+    long_mask = ~short_mask
+
+    if np.any(long_mask) and np.any(short_mask):
+        short_spacings = spacings[short_mask]
+        long_spacings = spacings[long_mask]
+        ratio = np.median(long_spacings) / np.median(short_spacings)
+        if ratio > gap_ratio_threshold:
+            # Count contacts per group: find runs of short spacings
+            gap_indices = np.where(long_mask)[0]
+            group_sizes = []
+            prev = 0
+            for gi in gap_indices:
+                group_sizes.append(gi - prev + 1)
+                prev = gi + 1
+            group_sizes.append(len(contact_positions) - prev)
+            return {
+                "contact_spacing": float(np.median(short_spacings)),
+                "has_gaps": True,
+                "gap_spacing": float(np.median(long_spacings)),
+                "contacts_per_group": int(np.median(group_sizes)),
+            }
+
+    return {
+        "contact_spacing": float(median_spacing),
+        "has_gaps": False,
+        "gap_spacing": None,
+        "contacts_per_group": None,
+    }
+
+
+def orient_deepest_first(
+    contact_positions: np.ndarray,
+    axis_origin: np.ndarray,
+    axis_direction: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Orient contacts so index 1 = deepest (closest to brain center at origin 0,0,0).
+
+    Args:
+        contact_positions: Sorted 1D array of positions along axis.
+        axis_origin: 3D center of the electrode cluster.
+        axis_direction: Unit vector along electrode axis.
+
+    Returns:
+        (sorted_positions, oriented_direction): positions sorted deepest-first,
+        and direction pointing from deepest to most lateral.
+    """
+    # Compute RAS coordinates of first and last contact
+    first_ras = axis_origin + contact_positions[0] * axis_direction
+    last_ras = axis_origin + contact_positions[-1] * axis_direction
+
+    # Deepest = closest to brain center (0,0,0)
+    if np.linalg.norm(first_ras) > np.linalg.norm(last_ras):
+        # Reverse: last is deeper
+        return contact_positions[::-1] - contact_positions[-1], -axis_direction
+    else:
+        return contact_positions - contact_positions[0], axis_direction
+
+
+def detect_electrodes(
+    metal_coords: np.ndarray,
+    min_contacts: int = 3,
+    expected_spacing: float = 3.5,
+    collinearity_tolerance: float = 10.0,
+    gap_ratio_threshold: float = 1.8,
+) -> list[Electrode]:
+    """Full detection pipeline: cluster -> fit -> detect contacts -> build Electrode objects.
+
+    Args:
+        metal_coords: (N, 3) array of all metal voxel RAS coordinates.
+        min_contacts: Minimum contacts to accept an electrode candidate.
+        expected_spacing: Expected contact spacing in mm.
+        collinearity_tolerance: Max angle for merging collinear fragments.
+        gap_ratio_threshold: Threshold for gap detection.
+
+    Returns:
+        List of Electrode objects with auto-numbered contacts (unnamed).
+
+    Example::
+
+        electrodes = detect_electrodes(all_metal_coords_ras)
+    """
+    # 1. Cluster
+    clusters = cluster_into_electrodes(metal_coords)
+
+    # 2. Merge collinear fragments (for gapped electrodes)
+    clusters = merge_collinear_clusters(
+        clusters, angle_tolerance=collinearity_tolerance
+    )
+
+    electrodes = []
+    for cluster in clusters:
+        if len(cluster) < 5:  # too few voxels to be an electrode
+            continue
+
+        # 3. Fit line
+        center, direction = fit_electrode_axis(cluster)
+
+        # 4. Project voxels onto axis
+        projections = np.dot(cluster - center, direction)
+
+        # 5. Detect contacts
+        contact_positions = detect_contacts_along_axis(
+            projections, expected_spacing=expected_spacing
+        )
+
+        if len(contact_positions) < min_contacts:
+            continue
+
+        # 6. Analyze spacing
+        spacing_info = analyze_spacing(contact_positions, gap_ratio_threshold)
+
+        # 7. Orient deepest first
+        sorted_positions, oriented_dir = orient_deepest_first(
+            contact_positions, center, direction
+        )
+
+        # 8. Build Electrode
+        params = ElectrodeParams(
+            contact_length=2.0,  # default, user can adjust later
+            contact_spacing=spacing_info["contact_spacing"],
+            contact_diameter=0.8,
+            gap_spacing=spacing_info["gap_spacing"],
+            contacts_per_group=spacing_info["contacts_per_group"],
+        )
+
+        contacts = []
+        for i, pos in enumerate(sorted_positions):
+            ras = center + pos * oriented_dir
+            contacts.append(Contact(index=i + 1, position_ras=tuple(ras)))
+
+        electrode = Electrode(
+            name="",
+            params=params,
+            contacts=contacts,
+            trajectory_direction=tuple(oriented_dir),
+        )
+        electrodes.append(electrode)
+
+    return electrodes

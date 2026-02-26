@@ -120,3 +120,101 @@ class TestDetectContactsAlongAxis:
         projections = np.concatenate([group1, group2])
         peaks = detect_contacts_along_axis(projections, expected_spacing=3.5)
         assert len(peaks) == 12
+
+
+from SEEGFellowLib.electrode_detector import (
+    merge_collinear_clusters,
+    analyze_spacing,
+    detect_electrodes,
+)
+from SEEGFellowLib.electrode_model import Electrode
+
+
+class TestMergeCollinearClusters:
+    def test_merges_two_collinear_fragments(self):
+        """Two fragments along the same line should merge."""
+        np.random.seed(42)
+        frag1 = np.column_stack(
+            [
+                np.linspace(0, 10, 20),
+                np.random.randn(20) * 0.3,
+                np.random.randn(20) * 0.3,
+            ]
+        )
+        frag2 = np.column_stack(
+            [
+                np.linspace(20, 30, 20),  # same axis, gap in between
+                np.random.randn(20) * 0.3,
+                np.random.randn(20) * 0.3,
+            ]
+        )
+        clusters = [frag1, frag2]
+        merged = merge_collinear_clusters(clusters, angle_tolerance=15.0)
+        assert len(merged) == 1
+
+    def test_does_not_merge_perpendicular(self):
+        np.random.seed(42)
+        frag1 = np.column_stack(
+            [
+                np.linspace(0, 20, 30),
+                np.zeros(30),
+                np.zeros(30),
+            ]
+        )
+        frag2 = np.column_stack(
+            [
+                np.zeros(30),
+                np.linspace(40, 60, 30),  # perpendicular, far away
+                np.zeros(30),
+            ]
+        )
+        clusters = [frag1, frag2]
+        merged = merge_collinear_clusters(clusters, angle_tolerance=15.0)
+        assert len(merged) == 2
+
+
+class TestAnalyzeSpacing:
+    def test_uniform_spacing(self):
+        positions = np.array([0.0, 3.5, 7.0, 10.5, 14.0])
+        spacing_info = analyze_spacing(positions)
+        assert not spacing_info["has_gaps"]
+        assert abs(spacing_info["contact_spacing"] - 3.5) < 0.5
+
+    def test_gapped_spacing(self):
+        # 4 contacts, gap, 4 contacts
+        group1 = np.array([0.0, 3.5, 7.0, 10.5])
+        group2 = group1 + 24.5  # gap of 14mm
+        positions = np.concatenate([group1, group2])
+        spacing_info = analyze_spacing(positions, gap_ratio_threshold=1.8)
+        assert spacing_info["has_gaps"]
+
+
+class TestDetectElectrodes:
+    def _make_electrode(self, start, direction, n_contacts, spacing=3.5):
+        """Create synthetic electrode voxels."""
+        direction = np.array(direction, dtype=float)
+        direction /= np.linalg.norm(direction)
+        points = []
+        for i in range(n_contacts):
+            center = np.array(start) + i * spacing * direction
+            for _ in range(5):
+                jitter = np.random.randn(3) * 0.3
+                points.append(center + jitter)
+        return np.array(points)
+
+    def test_detects_two_electrodes(self):
+        np.random.seed(42)
+        e1 = self._make_electrode([0, 0, 0], [1, 0, 0], 8)
+        e2 = self._make_electrode([0, 50, 0], [0, 1, 0], 6)
+        all_coords = np.vstack([e1, e2])
+
+        electrodes = detect_electrodes(all_coords)
+        assert len(electrodes) == 2
+        contact_counts = sorted([e.num_contacts for e in electrodes])
+        assert contact_counts == [6, 8]
+
+    def test_rejects_too_few_contacts(self):
+        np.random.seed(42)
+        e1 = self._make_electrode([0, 0, 0], [1, 0, 0], 2)  # only 2 contacts
+        electrodes = detect_electrodes(e1, min_contacts=3)
+        assert len(electrodes) == 0

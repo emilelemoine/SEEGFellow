@@ -190,58 +190,45 @@ class TestAnalyzeSpacing:
 
 
 class TestDetectElectrodes:
-    def _make_electrode(self, start, direction, n_contacts, spacing=3.5):
-        """Create synthetic electrode voxels."""
+    def _make_centers(self, start, direction, n_contacts, spacing=3.5):
+        """Create synthetic contact centers: one point per contact."""
         direction = np.array(direction, dtype=float)
         direction /= np.linalg.norm(direction)
-        points = []
-        for i in range(n_contacts):
-            center = np.array(start) + i * spacing * direction
-            for _ in range(5):
-                jitter = np.random.randn(3) * 0.3
-                points.append(center + jitter)
-        return np.array(points)
+        return np.array(
+            [np.array(start) + i * spacing * direction for i in range(n_contacts)]
+        )
 
     def test_detects_two_electrodes(self):
         np.random.seed(42)
-        e1 = self._make_electrode([0, 0, 0], [1, 0, 0], 8)
-        e2 = self._make_electrode([0, 50, 0], [0, 1, 0], 6)
-        all_coords = np.vstack([e1, e2])
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
+        e2 = self._make_centers([0, 50, 0], [0, 1, 0], 6)
+        all_centers = np.vstack([e1, e2])
 
-        electrodes = detect_electrodes(all_coords)
+        electrodes = detect_electrodes(all_centers)
         assert len(electrodes) == 2
         contact_counts = sorted([e.num_contacts for e in electrodes])
         assert contact_counts == [6, 8]
 
     def test_rejects_too_few_contacts(self):
-        np.random.seed(42)
-        e1 = self._make_electrode([0, 0, 0], [1, 0, 0], 2)  # only 2 contacts
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 2)
         electrodes = detect_electrodes(e1, min_contacts=3)
         assert len(electrodes) == 0
 
 
 class TestDetectElectrodesWithNoise:
-    """Verify detect_electrodes ignores non-electrode metal coords."""
-
-    def _make_electrode(self, start, direction, n_contacts, spacing=3.5):
+    def _make_centers(self, start, direction, n_contacts, spacing=3.5):
         direction = np.array(direction, dtype=float)
         direction /= np.linalg.norm(direction)
-        points = []
-        for i in range(n_contacts):
-            center = np.array(start) + i * spacing * direction
-            for _ in range(5):
-                points.append(center + np.random.randn(3) * 0.3)
-        return np.array(points)
+        return np.array(
+            [np.array(start) + i * spacing * direction for i in range(n_contacts)]
+        )
 
-    def test_ignores_bulky_noise_cluster(self):
-        """A bulky cluster of metal coords (bone-like) should produce no electrode."""
+    def test_ignores_scattered_noise(self):
+        """Random scattered points should not produce an electrode."""
         np.random.seed(0)
-        # Electrode
-        e1 = self._make_electrode([0, 0, 0], [1, 0, 0], 8)
-        # Bulky noise (e.g. residual bone) — spread in all directions equally
-        noise = np.random.uniform(-5, 5, (200, 3)) + np.array([0, 50, 0])
-        all_coords = np.vstack([e1, noise])
-        electrodes = detect_electrodes(all_coords)
-        # Only the real electrode should be found
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
+        noise = np.random.uniform(-5, 5, (20, 3)) + np.array([0, 50, 0])
+        all_centers = np.vstack([e1, noise])
+        electrodes = detect_electrodes(all_centers)
         assert len(electrodes) == 1
         assert electrodes[0].num_contacts == 8

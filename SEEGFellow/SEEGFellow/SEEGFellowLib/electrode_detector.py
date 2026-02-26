@@ -340,16 +340,19 @@ def orient_deepest_first(
 
 
 def detect_electrodes(
-    metal_coords: np.ndarray,
+    contact_centers: np.ndarray,
     min_contacts: int = 3,
     expected_spacing: float = 3.5,
     collinearity_tolerance: float = 10.0,
     gap_ratio_threshold: float = 1.8,
 ) -> list[Electrode]:
-    """Full detection pipeline: cluster -> fit -> detect contacts -> build Electrode objects.
+    """Full detection pipeline from pre-detected contact centers.
+
+    Each row in contact_centers is one contact center in RAS coordinates.
+    Steps: cluster -> merge collinear -> fit axis -> orient -> build Electrode.
 
     Args:
-        metal_coords: (N, 3) array of all metal voxel RAS coordinates.
+        contact_centers: (N, 3) array of contact center RAS coordinates.
         min_contacts: Minimum contacts to accept an electrode candidate.
         expected_spacing: Expected contact spacing in mm.
         collinearity_tolerance: Max angle for merging collinear fragments.
@@ -360,10 +363,12 @@ def detect_electrodes(
 
     Example::
 
-        electrodes = detect_electrodes(all_metal_coords_ras)
+        electrodes = detect_electrodes(contact_centers_ras)
     """
-    # 1. Cluster
-    clusters = cluster_into_electrodes(metal_coords)
+    # 1. Cluster centers into electrode candidates
+    clusters = cluster_into_electrodes(
+        contact_centers, distance_threshold=expected_spacing * 2
+    )
 
     # 2. Merge collinear fragments (for gapped electrodes)
     clusters = merge_collinear_clusters(
@@ -372,39 +377,32 @@ def detect_electrodes(
 
     electrodes = []
     for cluster in clusters:
-        if len(cluster) < 5:  # too few voxels to be an electrode
+        if len(cluster) < min_contacts:
             continue
 
-        # 3. Fit line
+        # 3. Fit axis through centers
         center, direction = fit_electrode_axis(cluster)
 
-        # 4. Project voxels onto axis
+        # 4. Project centers onto axis — each projection IS a contact position
         projections = np.dot(cluster - center, direction)
+        sorted_indices = np.argsort(projections)
+        sorted_projections = projections[sorted_indices]
 
-        # 5. Detect contacts
-        contact_positions = detect_contacts_along_axis(
-            projections, expected_spacing=expected_spacing
-        )
+        # 5. Analyze spacing
+        spacing_info = analyze_spacing(sorted_projections, gap_ratio_threshold)
 
-        if len(contact_positions) < min_contacts:
-            continue
-
-        # 6. Analyze spacing
-        spacing_info = analyze_spacing(contact_positions, gap_ratio_threshold)
-
-        # Reject if detected spacing is implausibly low (noise artifact — random
-        # clusters produce peaks at the minimum enforced distance of ~0.6 * expected)
+        # Reject clusters whose spacing is implausibly small (scattered noise)
         if 0 < spacing_info["contact_spacing"] < expected_spacing * 0.65:
             continue
 
-        # 7. Orient deepest first
+        # 6. Orient deepest first
         sorted_positions, oriented_dir = orient_deepest_first(
-            contact_positions, center, direction
+            sorted_projections, center, direction
         )
 
-        # 8. Build Electrode
+        # 7. Build Electrode
         params = ElectrodeParams(
-            contact_length=2.0,  # default, user can adjust later
+            contact_length=2.0,
             contact_spacing=spacing_info["contact_spacing"],
             contact_diameter=0.8,
             gap_spacing=spacing_info["gap_spacing"],

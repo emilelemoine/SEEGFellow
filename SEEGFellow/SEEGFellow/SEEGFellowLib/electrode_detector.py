@@ -420,3 +420,70 @@ def detect_electrodes(
         electrodes.append(electrode)
 
     return electrodes
+
+
+class ElectrodeDetector:
+    """Slicer wrapper: detects all electrodes from a metal segmentation volume.
+
+    Example (in Slicer Python console)::
+
+        detector = ElectrodeDetector()
+        electrodes = detector.detect_all(metal_labelmap_node, ct_volume_node)
+    """
+
+    def __init__(
+        self,
+        min_contacts: int = 3,
+        expected_spacing: float = 3.5,
+        collinearity_tolerance: float = 10.0,
+        gap_ratio_threshold: float = 1.8,
+    ):
+        self.min_contacts = min_contacts
+        self.expected_spacing = expected_spacing
+        self.collinearity_tolerance = collinearity_tolerance
+        self.gap_ratio_threshold = gap_ratio_threshold
+
+    def detect_all(self, metal_volume_node, ct_volume_node) -> list[Electrode]:
+        """From a binary metal segmentation, find all electrodes and their contacts.
+
+        Args:
+            metal_volume_node: vtkMRMLLabelMapVolumeNode with metal mask.
+            ct_volume_node: vtkMRMLScalarVolumeNode (used for geometry info).
+
+        Returns:
+            List of Electrode objects.
+        """
+        from slicer.util import arrayFromVolume
+
+        mask = arrayFromVolume(metal_volume_node)
+
+        # Get IJK-to-RAS transform from the volume node
+        ijk_to_ras = self._get_ijk_to_ras_matrix(metal_volume_node)
+
+        # Extract coordinates and transform to RAS
+        ijk_coords = np.argwhere(mask > 0).astype(float)
+        if len(ijk_coords) == 0:
+            return []
+
+        # Apply full IJK-to-RAS (handles non-axis-aligned volumes)
+        ones = np.ones((len(ijk_coords), 1))
+        ijk_h = np.hstack([ijk_coords, ones])  # homogeneous
+        ras_h = (ijk_to_ras @ ijk_h.T).T
+        ras_coords = ras_h[:, :3]
+
+        return detect_electrodes(
+            ras_coords,
+            min_contacts=self.min_contacts,
+            expected_spacing=self.expected_spacing,
+            collinearity_tolerance=self.collinearity_tolerance,
+            gap_ratio_threshold=self.gap_ratio_threshold,
+        )
+
+    @staticmethod
+    def _get_ijk_to_ras_matrix(volume_node) -> np.ndarray:
+        """Get 4x4 IJK-to-RAS matrix from a volume node."""
+        import vtk
+
+        mat = vtk.vtkMatrix4x4()
+        volume_node.GetIJKToRASMatrix(mat)
+        return np.array([[mat.GetElement(i, j) for j in range(4)] for i in range(4)])

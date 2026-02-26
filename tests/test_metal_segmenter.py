@@ -8,6 +8,7 @@ sys.path.insert(
 
 import numpy as np
 from SEEGFellowLib.metal_segmenter import threshold_volume, cleanup_metal_mask
+from SEEGFellowLib.metal_segmenter import detect_contact_centers
 
 
 class TestThresholdVolume:
@@ -49,6 +50,54 @@ class TestComputeHeadMask:
         mask = compute_head_mask(vol)
         # Internal air should be inside the head mask
         assert mask[15, 15, 15] == 1
+
+
+class TestDetectContactCenters:
+    def test_finds_isolated_blobs(self):
+        """Three bright blobs at known positions should produce three centers."""
+        ct = np.zeros((60, 60, 60), dtype=np.float32)
+        metal_mask = np.zeros((60, 60, 60), dtype=np.uint8)
+        # Place 3 bright spots (simulating contacts) at known IJK positions
+        centers_ijk = [(15, 30, 30), (25, 30, 30), (35, 30, 30)]
+        for ci, cj, ck in centers_ijk:
+            # Gaussian-like blob: bright center, fading neighbours
+            for di in range(-2, 3):
+                for dj in range(-2, 3):
+                    for dk in range(-2, 3):
+                        dist = (di**2 + dj**2 + dk**2) ** 0.5
+                        ct[ci + di, cj + dj, ck + dk] = 3000.0 * max(0, 1 - dist / 3)
+                        if dist <= 2:
+                            metal_mask[ci + di, cj + dj, ck + dk] = 1
+
+        detected = detect_contact_centers(ct, metal_mask, sigma=1.2)
+        assert detected.shape[1] == 3
+        assert len(detected) == 3
+        # Each detected center should be within 2 voxels of a true center
+        for true_center in centers_ijk:
+            dists = np.linalg.norm(detected - np.array(true_center), axis=1)
+            assert dists.min() < 2.0, f"No detection near {true_center}"
+
+    def test_rejects_blobs_outside_metal_mask(self):
+        """A bright spot outside the metal mask should not be detected."""
+        ct = np.zeros((40, 40, 40), dtype=np.float32)
+        metal_mask = np.zeros((40, 40, 40), dtype=np.uint8)
+        # Blob inside metal mask
+        ct[10, 20, 20] = 3000.0
+        metal_mask[9:12, 19:22, 19:22] = 1
+        # Blob outside metal mask (e.g. bone)
+        ct[30, 20, 20] = 3000.0
+        # metal_mask stays 0 at (30,20,20)
+
+        detected = detect_contact_centers(ct, metal_mask, sigma=1.2)
+        assert len(detected) == 1
+        assert abs(detected[0, 0] - 10) < 2.0
+
+    def test_empty_mask_returns_empty(self):
+        """An all-zero metal mask should return no centers."""
+        ct = np.full((20, 20, 20), 3000.0, dtype=np.float32)
+        metal_mask = np.zeros((20, 20, 20), dtype=np.uint8)
+        detected = detect_contact_centers(ct, metal_mask, sigma=1.2)
+        assert len(detected) == 0
 
 
 class TestCleanupMetalMaskImproved:

@@ -48,6 +48,46 @@ def compute_head_mask(volume: np.ndarray) -> np.ndarray:
     return (labeled == largest).astype(np.uint8)
 
 
+def detect_contact_centers(
+    ct_array: np.ndarray,
+    metal_mask: np.ndarray,
+    sigma: float = 1.2,
+) -> np.ndarray:
+    """Detect contact centers using Laplacian of Gaussian blob detection.
+
+    Applies LoG at the given scale (sigma) to the CT array, finds local
+    minima of the LoG response, and keeps only those within the metal mask.
+
+    Args:
+        ct_array: CT volume in HU (3D numpy array).
+        metal_mask: Binary mask (1 = candidate metal voxel).
+        sigma: LoG scale in voxels (typical 1.0–1.5 mm, adjust for voxel size).
+
+    Returns:
+        (N, 3) array of contact center positions in IJK coordinates.
+
+    Example::
+
+        centers_ijk = detect_contact_centers(ct_array, metal_mask, sigma=1.2)
+    """
+    if not np.any(metal_mask):
+        return np.empty((0, 3))
+
+    # LoG response (negative at blob centers for bright blobs)
+    log_response = ndimage.gaussian_laplace(ct_array.astype(np.float64), sigma=sigma)
+
+    # Local minima: voxel is smaller than all 26 neighbours
+    neighbourhood_size = 2 * int(np.ceil(sigma)) + 1
+    local_min = ndimage.minimum_filter(log_response, size=neighbourhood_size)
+    is_local_min = (log_response == local_min) & (log_response < 0)
+
+    # Keep only minima that fall within the metal mask
+    candidates = is_local_min & (metal_mask > 0)
+
+    centers = np.argwhere(candidates)
+    return centers
+
+
 def cleanup_metal_mask(
     mask: np.ndarray,
     head_mask: np.ndarray | None = None,

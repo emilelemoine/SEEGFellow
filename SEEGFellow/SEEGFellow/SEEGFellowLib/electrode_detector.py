@@ -372,15 +372,17 @@ class ElectrodeDetector:
         self.collinearity_tolerance = collinearity_tolerance
         self.gap_ratio_threshold = gap_ratio_threshold
 
-    def detect_all(self, ct_volume_node, threshold: float = 2500) -> list[Electrode]:
-        """From a CT volume, segment metal and find all electrodes and their contacts.
+    def detect_all(
+        self, ct_volume_node, threshold: float = 2500, sigma: float = 1.2
+    ) -> list[Electrode]:
+        """From a CT volume, detect all electrodes using LoG contact center detection.
 
-        Applies head masking and improved shape filtering internally — no separate
-        segmentation step is required.
+        Pipeline: head mask -> threshold within mask -> LoG blob detection -> electrode grouping.
 
         Args:
             ct_volume_node: vtkMRMLScalarVolumeNode with the post-implant CT.
             threshold: HU threshold for metal (default 2500).
+            sigma: LoG scale in voxels for contact detection.
 
         Returns:
             List of Electrode objects.
@@ -388,31 +390,33 @@ class ElectrodeDetector:
         Example::
 
             detector = ElectrodeDetector()
-            electrodes = detector.detect_all(ct_volume_node, threshold=2500)
+            electrodes = detector.detect_all(ct_volume_node, threshold=2500, sigma=1.2)
         """
         from slicer.util import arrayFromVolume
         from SEEGFellowLib.metal_segmenter import (
             compute_head_mask,
             threshold_volume,
+            detect_contact_centers,
         )
 
         ct_array = arrayFromVolume(ct_volume_node)
         head_mask = compute_head_mask(ct_array)
         metal_mask = threshold_volume(ct_array, threshold) & head_mask
 
-        ijk_to_ras = self._get_ijk_to_ras_matrix(ct_volume_node)
-
-        ijk_coords = np.argwhere(metal_mask > 0).astype(float)
-        if len(ijk_coords) == 0:
+        # LoG blob detection for contact centers (IJK coordinates)
+        centers_ijk = detect_contact_centers(ct_array, metal_mask, sigma=sigma)
+        if len(centers_ijk) == 0:
             return []
 
-        ones = np.ones((len(ijk_coords), 1))
-        ijk_h = np.hstack([ijk_coords, ones])
+        # Convert IJK to RAS
+        ijk_to_ras = self._get_ijk_to_ras_matrix(ct_volume_node)
+        ones = np.ones((len(centers_ijk), 1))
+        ijk_h = np.hstack([centers_ijk.astype(float), ones])
         ras_h = (ijk_to_ras @ ijk_h.T).T
-        ras_coords = ras_h[:, :3]
+        centers_ras = ras_h[:, :3]
 
         return detect_electrodes(
-            ras_coords,
+            centers_ras,
             min_contacts=self.min_contacts,
             expected_spacing=self.expected_spacing,
             collinearity_tolerance=self.collinearity_tolerance,

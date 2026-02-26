@@ -8,8 +8,6 @@ Example (in Slicer Python console)::
 
 from __future__ import annotations
 
-import slicer
-
 
 class CTtoT1Registration:
     """Wraps BRAINSFit for rigid CT-to-T1 registration."""
@@ -23,6 +21,8 @@ class CTtoT1Registration:
         Returns:
             vtkMRMLLinearTransformNode applied to the CT volume.
         """
+        import slicer
+
         transform_node = slicer.mrmlScene.AddNewNodeByClass(
             "vtkMRMLLinearTransformNode", "CT_RoughAlignment"
         )
@@ -47,6 +47,8 @@ class CTtoT1Registration:
         Returns:
             vtkMRMLLinearTransformNode with the registration result.
         """
+        import slicer
+
         output_transform = slicer.mrmlScene.AddNewNodeByClass(
             "vtkMRMLLinearTransformNode", "CT_to_T1_Registration"
         )
@@ -79,4 +81,6 @@ class CTtoT1Registration:
 
     def harden_transform(self, volume_node):
         """Harden the transform on a volume node (bake it into the volume)."""
+        import slicer
+
         slicer.vtkSlicerTransformLogic().hardenTransform(volume_node)

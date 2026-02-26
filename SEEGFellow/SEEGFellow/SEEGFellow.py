@@ -311,6 +311,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self.electrodes: list = []  # list[Electrode]
         self._seed_node = None
         self._direction_node = None
+        self._segmentation_node = None
 
     def cleanup(self):
         """Remove temporary markup nodes."""
@@ -377,17 +378,82 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
     # Step 4: Electrode detection
     # -------------------------------------------------------------------------
 
-    def run_electrode_detection(self, threshold: float = 2500) -> None:
+    def run_intracranial_mask(self) -> None:
+        """Compute intracranial mask and display it as a segmentation segment.
+
+        Example::
+
+            logic.run_intracranial_mask()
+        """
+        from SEEGFellowLib.metal_segmenter import compute_head_mask
+        from slicer.util import arrayFromVolume
+
+        ct_array = arrayFromVolume(self._ct_node)
+        head_mask = compute_head_mask(ct_array)
+
+        if self._segmentation_node is None:
+            self._segmentation_node = slicer.mrmlScene.AddNewNodeByClass(
+                "vtkMRMLSegmentationNode", "SEEGFellow Segmentation"
+            )
+            self._segmentation_node.CreateDefaultDisplayNodes()
+            self._segmentation_node.SetReferenceImageGeometryParameterFromVolumeNode(
+                self._ct_node
+            )
+
+        seg = self._segmentation_node.GetSegmentation()
+        existing_id = seg.GetSegmentIdBySegmentName("Intracranial")
+        if existing_id:
+            seg.RemoveSegment(existing_id)
+
+        segment_id = seg.AddEmptySegment("Intracranial", "Intracranial")
+        seg.GetSegment(segment_id).SetColor(0.0, 0.5, 1.0)
+        slicer.util.updateSegmentBinaryLabelmapFromArray(
+            head_mask, self._segmentation_node, segment_id, self._ct_node
+        )
+        self._head_mask = head_mask
+
+    def run_metal_threshold(self, threshold: float = 2500) -> None:
+        """Threshold CT within intracranial mask and display as a segment.
+
+        Example::
+
+            logic.run_metal_threshold(threshold=2500)
+        """
+        from SEEGFellowLib.metal_segmenter import threshold_volume
+        from slicer.util import arrayFromVolume
+
+        ct_array = arrayFromVolume(self._ct_node)
+        metal_mask = threshold_volume(ct_array, threshold)
+        if getattr(self, "_head_mask", None) is not None:
+            metal_mask = metal_mask & self._head_mask
+
+        seg = self._segmentation_node.GetSegmentation()
+        existing_id = seg.GetSegmentIdBySegmentName("Metal")
+        if existing_id:
+            seg.RemoveSegment(existing_id)
+
+        segment_id = seg.AddEmptySegment("Metal", "Metal")
+        seg.GetSegment(segment_id).SetColor(1.0, 1.0, 0.0)
+        slicer.util.updateSegmentBinaryLabelmapFromArray(
+            metal_mask, self._segmentation_node, segment_id, self._ct_node
+        )
+        self._metal_mask = metal_mask
+
+    def run_electrode_detection(
+        self, threshold: float = 2500, sigma: float = 1.2
+    ) -> None:
         """Run full automated electrode detection pipeline.
 
         Example::
 
-            logic.run_electrode_detection(threshold=2500)
+            logic.run_electrode_detection(threshold=2500, sigma=1.2)
         """
         from SEEGFellowLib.electrode_detector import ElectrodeDetector
 
         detector = ElectrodeDetector()
-        self.electrodes = detector.detect_all(self._ct_node, threshold=threshold)
+        self.electrodes = detector.detect_all(
+            self._ct_node, threshold=threshold, sigma=sigma
+        )
         self._create_fiducials_for_electrodes()
 
     def _create_fiducials_for_electrodes(self) -> None:

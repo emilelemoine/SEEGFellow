@@ -49,20 +49,14 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         )
         self.ui.rerunRegistrationButton.clicked.connect(self._on_register_clicked)
 
-        # Step 4: Metal Segmentation
-        self.ui.segmentMetalButton.clicked.connect(self._on_segment_metal_clicked)
-        self.ui.acceptSegmentationButton.clicked.connect(
-            self._on_accept_segmentation_clicked
-        )
-        self.ui.adjustSegmentationButton.clicked.connect(self._on_segment_metal_clicked)
-
-        # Step 5: Electrode Detection
+        # Step 4: Electrode Detection
+        self.ui.thresholdSlider.valueChanged.connect(self._on_threshold_changed)
         self.ui.detectElectrodesButton.clicked.connect(
             self._on_detect_electrodes_clicked
         )
         self.ui.applyNamesButton.clicked.connect(self._on_apply_names_clicked)
 
-        # Step 6: Manual Fallback
+        # Manual Fallback
         self.ui.placeSeedButton.clicked.connect(self._on_place_seed_clicked)
         self.ui.placeDirectionButton.clicked.connect(self._on_place_direction_clicked)
         self.ui.detectSingleButton.clicked.connect(self._on_detect_single_clicked)
@@ -145,32 +139,29 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             slicer.util.errorDisplay(f"Registration failed: {e}")
 
     def _on_accept_registration_clicked(self):
-        self.ui.metalSegCollapsibleButton.collapsed = False
-
-    # -------------------------------------------------------------------------
-    # Step 4: Metal Segmentation
-    # -------------------------------------------------------------------------
-
-    def _on_segment_metal_clicked(self):
-        threshold = self.ui.thresholdSlider.value
-        try:
-            slicer.util.showStatusMessage("Segmenting metal...")
-            self.logic.run_metal_segmentation(threshold)
-            slicer.util.showStatusMessage("Metal segmentation complete.")
-        except Exception as e:
-            slicer.util.errorDisplay(f"Metal segmentation failed: {e}")
-
-    def _on_accept_segmentation_clicked(self):
         self.ui.detectionCollapsibleButton.collapsed = False
 
     # -------------------------------------------------------------------------
-    # Step 5: Electrode Detection
+    # Step 4: Electrode Detection
     # -------------------------------------------------------------------------
 
+    def _on_threshold_changed(self, value: float) -> None:
+        ct_node = self.logic._ct_node
+        if ct_node is None:
+            self.ui.voxelCountLabel.setText("—")
+            return
+        import numpy as np
+        from slicer.util import arrayFromVolume
+
+        ct_array = arrayFromVolume(ct_node)
+        count = int(np.sum(ct_array >= value))
+        self.ui.voxelCountLabel.setText(f"{count:,} voxels above threshold")
+
     def _on_detect_electrodes_clicked(self):
+        threshold = self.ui.thresholdSlider.value
         try:
             slicer.util.showStatusMessage("Detecting electrodes...")
-            self.logic.run_electrode_detection()
+            self.logic.run_electrode_detection(threshold)
             self._populate_electrode_table()
             slicer.util.showStatusMessage(
                 f"Detected {len(self.logic.electrodes)} electrode(s)."
@@ -308,8 +299,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         logic = SEEGFellowLogic()
         logic.load_volumes("/path/T1.nii.gz", "/path/CT.nii.gz")
-        logic.run_metal_segmentation(threshold=2500)
-        logic.run_electrode_detection()
+        logic.run_electrode_detection(threshold=2500)
     """
 
     def __init__(self):
@@ -318,7 +308,6 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._ct_node = None
         self._rough_transform_node = None
         self._registration_transform_node = None
-        self._metal_labelmap = None
         self.electrodes: list = []  # list[Electrode]
         self._seed_node = None
         self._direction_node = None
@@ -385,39 +374,20 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         )
 
     # -------------------------------------------------------------------------
-    # Step 4: Metal segmentation
+    # Step 4: Electrode detection
     # -------------------------------------------------------------------------
 
-    def run_metal_segmentation(self, threshold: float = 2500) -> None:
-        """Threshold and clean up CT to isolate metal voxels.
-
-        Example::
-
-            logic.run_metal_segmentation(threshold=2500)
-        """
-        from SEEGFellowLib.metal_segmenter import MetalSegmenter
-
-        segmenter = MetalSegmenter()
-        # Remove previous labelmap if it exists
-        if self._metal_labelmap is not None:
-            slicer.mrmlScene.RemoveNode(self._metal_labelmap)
-        self._metal_labelmap = segmenter.segment(self._ct_node, threshold=threshold)
-
-    # -------------------------------------------------------------------------
-    # Step 5: Electrode detection
-    # -------------------------------------------------------------------------
-
-    def run_electrode_detection(self) -> None:
+    def run_electrode_detection(self, threshold: float = 2500) -> None:
         """Run full automated electrode detection pipeline.
 
         Example::
 
-            logic.run_electrode_detection()
+            logic.run_electrode_detection(threshold=2500)
         """
         from SEEGFellowLib.electrode_detector import ElectrodeDetector
 
         detector = ElectrodeDetector()
-        self.electrodes = detector.detect_all(self._metal_labelmap, self._ct_node)
+        self.electrodes = detector.detect_all(self._ct_node, threshold=threshold)
         self._create_fiducials_for_electrodes()
 
     def _create_fiducials_for_electrodes(self) -> None:

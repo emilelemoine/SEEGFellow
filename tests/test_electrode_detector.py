@@ -60,3 +60,63 @@ class TestClusterIntoElectrodes:
         e1 = self._make_line_cluster([0, 0, 0], [1, 0, 0], 10)
         clusters = cluster_into_electrodes(e1)
         assert len(clusters) == 1
+
+
+from SEEGFellowLib.electrode_detector import (
+    fit_electrode_axis,
+    detect_contacts_along_axis,
+)
+
+
+class TestFitElectrodeAxis:
+    def test_fits_line_along_x(self):
+        np.random.seed(42)
+        points = np.column_stack(
+            [
+                np.linspace(0, 30, 50),
+                np.random.randn(50) * 0.3,
+                np.random.randn(50) * 0.3,
+            ]
+        )
+        center, direction = fit_electrode_axis(points)
+        # Direction should be approximately along x-axis
+        assert abs(abs(direction[0]) - 1.0) < 0.1
+
+    def test_returns_unit_vector(self):
+        points = np.column_stack(
+            [
+                np.linspace(0, 10, 20),
+                np.zeros(20),
+                np.zeros(20),
+            ]
+        )
+        _, direction = fit_electrode_axis(points)
+        np.testing.assert_allclose(np.linalg.norm(direction), 1.0, atol=1e-10)
+
+
+class TestDetectContactsAlongAxis:
+    def _make_contacts_1d(self, n_contacts, spacing, noise=0.2):
+        """Create 1D density profile with peaks at regular spacing."""
+        positions = []
+        for i in range(n_contacts):
+            center = i * spacing
+            # Several points per contact
+            for _ in range(5):
+                positions.append(center + np.random.randn() * noise)
+        return np.array(positions)
+
+    def test_detects_evenly_spaced_contacts(self):
+        np.random.seed(42)
+        projections = self._make_contacts_1d(8, spacing=3.5)
+        peaks = detect_contacts_along_axis(projections, expected_spacing=3.5)
+        assert len(peaks) == 8
+
+    def test_detects_gapped_contacts(self):
+        """6 contacts - gap - 6 contacts."""
+        np.random.seed(42)
+        group1 = self._make_contacts_1d(6, spacing=3.5)
+        gap = 6 * 3.5 + 10.0  # gap of 10mm after group 1 ends
+        group2 = self._make_contacts_1d(6, spacing=3.5) + gap
+        projections = np.concatenate([group1, group2])
+        peaks = detect_contacts_along_axis(projections, expected_spacing=3.5)
+        assert len(peaks) == 12

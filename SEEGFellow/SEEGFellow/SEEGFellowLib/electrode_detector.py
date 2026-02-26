@@ -392,6 +392,11 @@ def detect_electrodes(
         # 6. Analyze spacing
         spacing_info = analyze_spacing(contact_positions, gap_ratio_threshold)
 
+        # Reject if detected spacing is implausibly low (noise artifact — random
+        # clusters produce peaks at the minimum enforced distance of ~0.6 * expected)
+        if 0 < spacing_info["contact_spacing"] < expected_spacing * 0.65:
+            continue
+
         # 7. Orient deepest first
         sorted_positions, oriented_dir = orient_deepest_first(
             contact_positions, center, direction
@@ -443,31 +448,44 @@ class ElectrodeDetector:
         self.collinearity_tolerance = collinearity_tolerance
         self.gap_ratio_threshold = gap_ratio_threshold
 
-    def detect_all(self, metal_volume_node, ct_volume_node) -> list[Electrode]:
-        """From a binary metal segmentation, find all electrodes and their contacts.
+    def detect_all(self, ct_volume_node, threshold: float = 2500) -> list[Electrode]:
+        """From a CT volume, segment metal and find all electrodes and their contacts.
+
+        Applies head masking and improved shape filtering internally — no separate
+        segmentation step is required.
 
         Args:
-            metal_volume_node: vtkMRMLLabelMapVolumeNode with metal mask.
-            ct_volume_node: vtkMRMLScalarVolumeNode (used for geometry info).
+            ct_volume_node: vtkMRMLScalarVolumeNode with the post-implant CT.
+            threshold: HU threshold for metal (default 2500).
 
         Returns:
             List of Electrode objects.
+
+        Example::
+
+            detector = ElectrodeDetector()
+            electrodes = detector.detect_all(ct_volume_node, threshold=2500)
         """
         from slicer.util import arrayFromVolume
+        from SEEGFellowLib.metal_segmenter import (
+            compute_head_mask,
+            threshold_volume,
+            cleanup_metal_mask,
+        )
 
-        mask = arrayFromVolume(metal_volume_node)
+        ct_array = arrayFromVolume(ct_volume_node)
+        head_mask = compute_head_mask(ct_array)
+        metal_mask = threshold_volume(ct_array, threshold)
+        cleaned = cleanup_metal_mask(metal_mask, head_mask=head_mask)
 
-        # Get IJK-to-RAS transform from the volume node
-        ijk_to_ras = self._get_ijk_to_ras_matrix(metal_volume_node)
+        ijk_to_ras = self._get_ijk_to_ras_matrix(ct_volume_node)
 
-        # Extract coordinates and transform to RAS
-        ijk_coords = np.argwhere(mask > 0).astype(float)
+        ijk_coords = np.argwhere(cleaned > 0).astype(float)
         if len(ijk_coords) == 0:
             return []
 
-        # Apply full IJK-to-RAS (handles non-axis-aligned volumes)
         ones = np.ones((len(ijk_coords), 1))
-        ijk_h = np.hstack([ijk_coords, ones])  # homogeneous
+        ijk_h = np.hstack([ijk_coords, ones])
         ras_h = (ijk_to_ras @ ijk_h.T).T
         ras_coords = ras_h[:, :3]
 

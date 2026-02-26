@@ -34,31 +34,24 @@ class TestExtractMetalCoords:
 
 
 class TestClusterIntoElectrodes:
-    def _make_line_cluster(self, start, direction, n_contacts, contact_voxels=3):
-        """Create a synthetic electrode: a line of small clusters."""
+    def _make_centers(self, start, direction, n_contacts, spacing=3.5):
+        """Create synthetic contact centers: one point per contact."""
         direction = np.array(direction, dtype=float)
         direction /= np.linalg.norm(direction)
-        points = []
-        for i in range(n_contacts):
-            center = np.array(start) + i * 3.5 * direction  # 3.5mm spacing
-            # Small blob around each contact
-            for _ in range(contact_voxels):
-                jitter = np.random.randn(3) * 0.3
-                points.append(center + jitter)
-        return np.array(points)
+        return np.array(
+            [np.array(start) + i * spacing * direction for i in range(n_contacts)]
+        )
 
     def test_two_separate_electrodes(self):
-        np.random.seed(42)
-        e1 = self._make_line_cluster([0, 0, 0], [1, 0, 0], 8)
-        e2 = self._make_line_cluster([0, 50, 0], [0, 1, 0], 6)
-        all_coords = np.vstack([e1, e2])
-        clusters = cluster_into_electrodes(all_coords)
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
+        e2 = self._make_centers([0, 50, 0], [0, 1, 0], 6)
+        all_centers = np.vstack([e1, e2])
+        clusters = cluster_into_electrodes(all_centers, distance_threshold=7.0)
         assert len(clusters) == 2
 
     def test_single_electrode(self):
-        np.random.seed(42)
-        e1 = self._make_line_cluster([0, 0, 0], [1, 0, 0], 10)
-        clusters = cluster_into_electrodes(e1)
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 10)
+        clusters = cluster_into_electrodes(e1, distance_threshold=7.0)
         assert len(clusters) == 1
 
 

@@ -21,104 +21,87 @@ def threshold_volume(volume: np.ndarray, threshold: float = 2500) -> np.ndarray:
     return (volume >= threshold).astype(np.uint8)
 
 
-def cleanup_metal_mask(
-    mask: np.ndarray,
-    min_component_size: int = 5,
-    max_component_volume: int = 500,
-    max_elongation_ratio: float = 2.0,
-) -> np.ndarray:
-    """Remove noise and bone fragments from a binary metal mask.
+def compute_head_mask(volume: np.ndarray) -> np.ndarray:
+    """Create a binary mask of the patient head by excluding air voxels.
 
-    Steps:
-    1. Morphological opening to remove small noise
-    2. Connected component analysis
-    3. Remove components smaller than min_component_size
-    4. Remove large bulky components (bone) based on volume and shape
+    Thresholds at -200 HU (distinguishes tissue/bone from air), fills internal
+    air pockets (sinuses, ventricles), and keeps the largest connected component
+    to exclude anything outside the patient.
 
     Args:
-        mask: Binary mask (0/1 uint8).
-        min_component_size: Minimum voxel count to keep a component.
-        max_component_volume: Components larger than this are candidate bone.
-        max_elongation_ratio: Bone has low elongation (bounding box is roughly
-            cubic). Components with (longest axis / shortest axis) below this
-            ratio AND volume above max_component_volume are removed.
+        volume: CT array in HU.
+
+    Returns:
+        Binary uint8 mask with 1 inside the patient head.
 
     Example::
 
-        cleaned = cleanup_metal_mask(binary_mask, min_component_size=5)
+        head_mask = compute_head_mask(ct_array)
     """
-    struct = ndimage.generate_binary_structure(3, 1)
+    rough = (volume > -200).astype(np.uint8)
+    filled = ndimage.binary_fill_holes(rough)
+    labeled, n = ndimage.label(filled)
+    if n == 0:
+        return rough
+    sizes = ndimage.sum(filled, labeled, range(1, n + 1))
+    largest = int(np.argmax(sizes)) + 1
+    return (labeled == largest).astype(np.uint8)
 
-    # Connected component analysis (size filtering replaces morphological opening
-    # so that thin elongated electrode clusters are not eroded away)
+
+def cleanup_metal_mask(
+    mask: np.ndarray,
+    head_mask: np.ndarray | None = None,
+    min_component_size: int = 5,
+    min_elongation_size: int = 30,
+    min_elongation_ratio: float = 5.0,
+) -> np.ndarray:
+    """Remove noise and false positives from a binary metal mask.
+
+    Steps:
+    1. Apply head mask to exclude external metal (headframes, dental outside skull).
+    2. Connected component analysis.
+    3. Remove tiny components (< min_component_size voxels).
+    4. For medium/large components (>= min_elongation_size voxels), require high
+       elongation (longest_bbox_axis / shortest_bbox_axis >= min_elongation_ratio).
+       SEEG electrodes have ratio ~15-30; dental implants ~3-4.
+       Small components are kept unconditionally to preserve fragments of
+       gapped electrodes that will be merged by the detector.
+
+    Args:
+        mask: Binary mask (0/1 uint8).
+        head_mask: Optional binary head mask from compute_head_mask(). When
+            provided, metal outside the head is removed before analysis.
+        min_component_size: Minimum voxel count to keep any component.
+        min_elongation_size: Components >= this size must pass the elongation check.
+        min_elongation_ratio: Minimum elongation for medium/large components.
+
+    Example::
+
+        head_mask = compute_head_mask(ct_array)
+        cleaned = cleanup_metal_mask(binary_mask, head_mask=head_mask)
+    """
+    if head_mask is not None:
+        mask = (mask & head_mask).astype(np.uint8)
+
+    struct = ndimage.generate_binary_structure(3, 1)
     labeled, num_features = ndimage.label(mask, structure=struct)
 
     result = np.zeros_like(mask)
     for comp_id in range(1, num_features + 1):
         component = labeled == comp_id
-        volume = np.sum(component)
+        volume = int(np.sum(component))
 
-        # Remove small noise
         if volume < min_component_size:
             continue
 
-        # Check if large component is bone-like (bulky, not elongated)
-        if volume > max_component_volume:
+        if volume >= min_elongation_size:
             coords = np.argwhere(component)
             bbox_size = coords.max(axis=0) - coords.min(axis=0) + 1
             sorted_dims = np.sort(bbox_size)
-            # Elongation: longest / shortest dimension
-            if sorted_dims[0] > 0:
-                elongation = sorted_dims[-1] / sorted_dims[0]
-            else:
-                elongation = 1.0
-            # Bone is bulky (low elongation), electrodes are elongated
-            if elongation < max_elongation_ratio:
+            elongation = sorted_dims[-1] / sorted_dims[0] if sorted_dims[0] > 0 else 1.0
+            if elongation < min_elongation_ratio:
                 continue
 
         result[component] = 1
 
     return result
-
-
-class MetalSegmenter:
-    """Slicer wrapper: segments metal from a CT volume node.
-
-    Example (in Slicer Python console)::
-
-        segmenter = MetalSegmenter()
-        metal_labelmap = segmenter.segment(ct_volume_node, threshold=2500)
-    """
-
-    def segment(self, ct_volume_node, threshold: float = 2500):
-        """Threshold CT and clean up to isolate metal voxels.
-
-        Args:
-            ct_volume_node: vtkMRMLScalarVolumeNode with the CT data.
-            threshold: HU threshold for metal.
-
-        Returns:
-            vtkMRMLLabelMapVolumeNode containing the metal mask.
-        """
-        import slicer
-        from slicer.util import arrayFromVolume, updateVolumeFromArray
-
-        ct_array = arrayFromVolume(ct_volume_node)
-        mask = threshold_volume(ct_array, threshold)
-        cleaned = cleanup_metal_mask(mask)
-
-        # Create output labelmap node
-        labelmap_node = slicer.mrmlScene.AddNewNodeByClass(
-            "vtkMRMLLabelMapVolumeNode", "MetalSegmentation"
-        )
-        # Copy geometry from CT
-        labelmap_node.CopyOrientation(ct_volume_node)
-
-        # Use a volumes logic to copy the volume properties
-        volumes_logic = slicer.modules.volumes.logic()
-        volumes_logic.CreateLabelVolumeFromVolume(
-            slicer.mrmlScene, labelmap_node, ct_volume_node
-        )
-
-        updateVolumeFromArray(labelmap_node, cleaned)
-        return labelmap_node

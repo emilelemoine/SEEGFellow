@@ -2,23 +2,83 @@
 
 ## Overview
 
-A 3D Slicer scripted module for semi-automatic localization and visualization of SEEG (stereo-electroencephalography) electrode contacts from post-implant CT images.
+A 3D Slicer scripted module for semi-automatic localization and visualization of SEEG (stereo-electroencephalography) electrode contacts from post-implant CT images. The module guides the user through a step-by-step pipeline: loading data, registration, metal segmentation, and automated electrode detection with manual review.
 
-## Input Assumptions
+## User Workflow (Step-by-Step Pipeline)
 
-- A post-implant CT already coregistered to a T1 MRI (registration handled outside this extension)
-- The CT volume is loaded in Slicer as a scalar volume node
+The module presents a wizard-style interface. Each step must be completed before the next becomes available.
 
-## User Workflow
+### Step 1 — Load Data
 
-1. Select the CT volume from a dropdown
-2. Create a new electrode: set name (e.g., "A", "LT"), number of contacts k, and electrode parameters (contact length, spacing, diameter) from presets or custom values
-3. Click "Place seed point" → Slicer enters markup placement mode. User clicks on the **deepest (most mesial) contact** (#1) in the slice view
-4. Optionally click "Set direction hint" → user places a second point along the electrode shaft to help the algorithm find the correct trajectory direction
-5. Click "Detect contacts" → algorithm runs, places k labeled fiducials (e.g., A1, A2, ..., Ak)
-6. User can **drag any fiducial** to manually correct positions
-7. Optionally create a segmentation with per-contact cylindrical segments
-8. Repeat for each electrode
+User selects two volumes from the file system:
+- **T1 pre-implant MRI** (reference anatomy)
+- **Post-implant CT** (contains electrode artifacts)
+
+Both are loaded into Slicer as scalar volume nodes. The panel provides file browser buttons for each.
+
+### Step 2 — Rough Alignment (CT → T1)
+
+User manually aligns the CT to the T1 using Slicer's built-in **Transforms** module:
+- The panel creates a linear transform node and applies it to the CT volume
+- Instructions guide the user to open the Transforms module, select the transform, and use the translation/rotation sliders to roughly align the CT to the T1
+- A "Done" button in the panel lets the user confirm alignment is acceptable and proceed
+
+### Step 3 — Co-registration
+
+Automated rigid registration to refine the alignment:
+- Uses **BRAINSFit** (built-in to Slicer) with a rigid registration preset
+- User clicks "Register" → BRAINSFit runs with the rough-aligned CT as moving volume and T1 as fixed volume
+- Result is displayed in the slice views (CT overlaid on T1)
+- User inspects the overlay and clicks "Accept" to proceed or "Re-run" to adjust parameters
+
+### Step 4 — Metal Segmentation
+
+Separate metal (electrode contacts) from bone and other high-intensity structures in the CT:
+1. **Thresholding**: Apply a HU threshold (default ~2500, configurable via slider) to isolate high-intensity voxels
+2. **Morphological cleanup**: Connected component analysis and morphological operations (opening/closing) to remove bone fragments, streak artifacts, and noise
+3. **User review**: The resulting metal-only binary labelmap is shown as an overlay. User can:
+   - Adjust the threshold and re-run
+   - Accept the segmentation to proceed
+
+The output is a binary volume containing only the metal voxels, used as input for electrode detection.
+
+### Step 5 — Automated Electrode Detection
+
+The algorithm automatically finds all electrodes from the metal segmentation:
+
+1. **Clustering**: From the binary metal volume, identify connected components or use DBSCAN-style clustering to group metal voxels into candidate electrode clusters
+2. **Line fitting**: For each cluster, fit a line (PCA on voxel positions) to get the electrode trajectory axis
+3. **Contact detection along each line**: Project metal voxels onto the fitted line and detect contacts as peaks/segments of high density along the axis. Contacts within an electrode are roughly equally spaced
+4. **Gap handling**: Some electrodes have groups of contacts separated by gaps (e.g., 6 contacts — gap — 6 contacts — gap). The algorithm detects this pattern by looking for a bimodal spacing distribution: a short spacing (between contacts within a group) and a longer spacing (between groups). All contacts along the same trajectory are kept as one electrode regardless of gaps
+5. **Auto-labeling**: Each detected electrode's contacts are numbered sequentially (1, 2, 3, ...) from the deepest (most mesial) to the most lateral
+
+### Step 6 — Electrode Naming (User Mapping)
+
+The detected electrodes are displayed as numbered lines in a table. For each detected electrode line, the user assigns a clinical label (e.g., "A", "B", "LT", "SFG"):
+- Table shows each detected electrode with: number of contacts, approximate entry region, a thumbnail/minimap
+- User types or selects a name for each electrode
+- Contact labels are generated by combining the electrode name with the contact number (e.g., A1, A2, ..., A12)
+- User can also delete false-positive detections (e.g., artifacts mistaken for electrodes)
+
+### Step 7 — Manual Review & Correction
+
+- All detected contacts are shown as draggable fiducials in the slice views and 3D view
+- User can **drag any fiducial** to correct its position
+- User can **delete** spurious contacts or **add** missing ones
+
+### Step 8 — Manual Fallback (Seed-Point Mode)
+
+If the automated detection misses an electrode entirely, the user can manually detect it:
+1. Set electrode parameters (contact length, spacing, diameter) from presets or custom values
+2. Click "Place seed point" → click on the deepest contact in the slice view
+3. Optionally place a direction hint point
+4. Click "Detect contacts" → runs the intensity-profile algorithm along that single electrode
+5. Contacts are added to the session alongside the auto-detected ones
+
+### Step 9 — Segmentation & Export
+
+- Optionally create a segmentation with per-contact cylindrical segments for 3D visualization
+- Export contact coordinates (CSV/spreadsheet)
 
 ## Extension Structure
 
@@ -31,7 +91,10 @@ SEEGFellow/
 │   ├── SEEGFellowLib/
 │   │   ├── __init__.py
 │   │   ├── electrode_model.py         # Data classes: Electrode, Contact, ElectrodeParams
-│   │   ├── trajectory_detector.py     # Base class + IntensityProfileDetector
+│   │   ├── registration.py            # BRAINSFit wrapper for CT-to-T1 registration
+│   │   ├── metal_segmenter.py         # Thresholding + morphological cleanup
+│   │   ├── electrode_detector.py      # Automated full-brain electrode detection
+│   │   ├── trajectory_detector.py     # Single-electrode seed-point detector (fallback)
 │   │   └── contact_segmenter.py       # Creates segmentation from detected contacts
 │   ├── Resources/
 │   │   ├── Icons/
@@ -58,19 +121,50 @@ class ElectrodeParams:
     contact_length: float    # mm (e.g., 2.0)
     contact_spacing: float   # mm center-to-center (e.g., 3.5)
     contact_diameter: float  # mm (e.g., 0.8)
+    gap_spacing: float | None  # mm center-to-center between groups, None if no gaps
+    contacts_per_group: int | None  # number of contacts per group, None if no gaps
 
 @dataclass
 class Electrode:
-    name: str                    # e.g., "A", "LT", "SFG"
+    name: str                    # e.g., "A", "LT", "SFG" — assigned by user in Step 6
     num_contacts: int            # k
     params: ElectrodeParams
     contacts: list[Contact]
     trajectory_direction: tuple  # unit vector from mesial to lateral
-    seed_point: tuple            # original user click (RAS)
     markups_node_id: str         # Slicer MRML node ID for the fiducials
 ```
 
-## Detection Algorithm (`trajectory_detector.py`)
+## Automated Electrode Detection (`electrode_detector.py`)
+
+### ElectrodeDetector
+
+```python
+class ElectrodeDetector:
+    def detect_all(self, metal_volume, ct_volume) -> list[Electrode]:
+        """From a binary metal segmentation, find all electrodes and their contacts."""
+```
+
+### Algorithm
+
+1. **Extract metal voxel coordinates** from the binary metal volume (output of Step 4)
+2. **Cluster into electrode candidates**: Use connected components on the binary volume. For electrodes with gaps, connected components may split one electrode into multiple fragments — merge fragments that are collinear (same trajectory axis within angular tolerance)
+3. **For each candidate cluster**:
+   a. Fit a line via PCA on the voxel positions → electrode axis
+   b. Project all voxels onto this axis to get a 1D density profile
+   c. Detect contacts as peaks in the density profile (using `scipy.signal.find_peaks`)
+   d. Analyze inter-contact spacing: if spacing is bimodal (short + long), classify as a gapped electrode and record both spacings
+   e. Orient contacts from deepest (most mesial, closest to brain center) to most lateral
+4. **Filter**: Reject candidates with fewer than 3 contacts or inconsistent spacing (likely artifacts)
+5. **Output**: List of `Electrode` objects with auto-numbered contacts (unnamed until Step 6)
+
+### Key parameters (configurable in GUI)
+
+- `collinearity_tolerance`: max angle in degrees between fragments to consider them part of the same electrode (default: 10°)
+- `min_contacts`: minimum contacts to accept a candidate as an electrode (default: 3)
+- `spacing_tolerance`: max deviation from median spacing before flagging irregular spacing (default: 1.0 mm)
+- `gap_ratio_threshold`: ratio of long/short spacing above which a gap is detected (default: 1.8)
+
+## Single-Electrode Detector — Fallback (`trajectory_detector.py`)
 
 ### Base class
 
@@ -81,9 +175,7 @@ class TrajectoryDetector(ABC):
         """Given a seed point, find num_contacts contacts along an electrode."""
 ```
 
-This abstraction allows swapping in a future DL-based detector without changing the rest of the module.
-
-### IntensityProfileDetector (initial implementation)
+### IntensityProfileDetector (implementation)
 
 1. **Seed point**: User-clicked RAS coordinates of contact #1
 2. **Local neighborhood**: Extract voxels within a ~20mm radius sphere around the seed. Threshold at a configurable HU value (default ~2500) to isolate metal
@@ -93,35 +185,81 @@ This abstraction allows swapping in a future DL-based detector without changing 
    - Orient the direction vector to point outward (away from brain center / toward lateral)
 4. **Intensity profile**: Sample CT intensity along the trajectory line from contact #1, extending outward for `(k-1) * spacing + margin` mm. Use sub-voxel interpolation for accuracy
 5. **Peak detection**: Find peaks in the intensity profile using scipy.signal.find_peaks with `distance` based on expected contact spacing
-6. **Refinement**: If detected peaks are within a tolerance of the expected evenly-spaced positions, snap to the expected grid. This handles noisy profiles where some peaks are ambiguous
+6. **Refinement**: If detected peaks are within a tolerance of the expected evenly-spaced positions, snap to the expected grid
 7. **Output**: k Contact objects with RAS positions, numbered 1 (deepest) to k (most lateral)
 
-### Key parameters (configurable in GUI)
+## Registration (`registration.py`)
 
-- `intensity_threshold`: HU threshold for metal detection (default: 2500)
-- `search_radius`: radius in mm for local neighborhood PCA (default: 20)
-- `peak_prominence`: minimum prominence for peak detection (default: 500)
-- `spacing_tolerance`: max deviation from expected spacing before rejecting a peak (default: 1.0 mm)
+Wraps BRAINSFit for rigid CT-to-T1 registration:
+
+```python
+class CTtoT1Registration:
+    def run(self, ct_node, t1_node, initial_transform=None) -> vtkMRMLLinearTransformNode:
+        """Run BRAINSFit rigid registration. Returns the output transform node."""
+```
+
+- Registration type: rigid (6 DOF)
+- Uses the user's rough alignment (from Step 2) as initialization
+- Sampling percentage and other BRAINSFit parameters set to sensible defaults for CT-to-MRI
+
+## Metal Segmentation (`metal_segmenter.py`)
+
+```python
+class MetalSegmenter:
+    def segment(self, ct_volume, threshold=2500) -> vtkMRMLLabelMapVolumeNode:
+        """Threshold CT and clean up to isolate metal voxels."""
+```
+
+1. Threshold CT at the given HU value → binary volume
+2. Connected component analysis to identify clusters
+3. Morphological opening to remove small noise
+4. Morphological closing to fill small holes within contacts
+5. Remove large connected components (likely bone) based on volume/shape heuristics (bone fragments are bulkier and less elongated than electrode shafts)
 
 ## GUI Design (`SEEGFellow.ui` + Widget)
 
-### Panel sections (top to bottom)
+### Wizard-style layout
 
-1. **Input**: `qMRMLNodeComboBox` for CT volume selection (filtered to scalar volumes)
-2. **Electrode Parameters**:
-   - Name: `QLineEdit`
-   - Number of contacts: `QSpinBox` (range 1–20)
-   - Preset dropdown: `QComboBox` with entries like "AdTech SD08R-SP10X (2mm contact, 3.5mm spacing)" etc.
-   - Contact length / spacing / diameter: `QDoubleSpinBox` fields (auto-filled from preset, editable for custom)
-3. **Detection**:
-   - "Place seed point" `QPushButton` → enters single-fiducial placement mode
-   - "Set direction hint" `QPushButton` → enters second-point placement mode (optional)
+The panel is organized as a collapsible step-by-step workflow. Each step is a `ctkCollapsibleButton` that expands when active and shows a status indicator (pending / in progress / done).
+
+1. **Load Data**:
+   - "Select T1 MRI" file browser button + path display
+   - "Select Post-implant CT" file browser button + path display
+   - "Load" button → loads both volumes into Slicer
+
+2. **Rough Alignment**:
+   - Instructions text: "Use the Transforms module to roughly align the CT to the T1"
+   - "Create Transform" button → creates a linear transform and applies it to the CT
+   - "Open Transforms Module" button → switches to the Transforms module
+   - "Done — Proceed to Registration" button
+
+3. **Co-registration**:
+   - "Register (BRAINSFit Rigid)" button → runs registration
+   - Progress bar during registration
+   - "Accept" / "Re-run with settings..." buttons
+
+4. **Metal Segmentation**:
    - Intensity threshold: `ctkSliderWidget` (range 500–4000, default 2500)
-   - "Detect contacts" `QPushButton` → runs algorithm
-4. **Results**:
-   - Contact table: `QTableWidget` showing contact label, R, A, S coordinates
-   - "Create segmentation" `QPushButton`
-5. **Electrode List**:
+   - "Segment Metal" button → runs segmentation
+   - "Accept" / "Adjust & Re-run" buttons
+
+5. **Electrode Detection**:
+   - "Detect All Electrodes" button → runs automated detection
+   - Results table: detected electrode lines with contact count, spacing info
+   - Per-electrode name assignment: `QLineEdit` in each row
+   - "Delete" button per row for false positives
+   - "Apply Names" button to finalize
+
+6. **Manual Fallback** (collapsed by default):
+   - Electrode preset dropdown + custom parameter fields
+   - "Place seed point" / "Set direction hint" / "Detect contacts" buttons
+
+7. **Results & Export**:
+   - Contact table: `QTableWidget` showing electrode name, contact label, R, A, S coordinates
+   - "Create segmentation" button
+   - "Export CSV" button
+
+8. **Electrode List**:
    - `QListWidget` showing all electrodes in the session
    - "Delete electrode" button to remove selected electrode and its fiducials
 
@@ -138,7 +276,6 @@ Creates a `vtkMRMLSegmentationNode` with one segment per contact:
 ## Slicer Integration Details
 
 - **Fiducial interaction**: Each electrode gets its own `vtkMRMLMarkupsFiducialNode`. Control points are draggable by default, giving free manual correction
-- **Observation**: The widget observes `PointPositionDefinedEvent` on the seed markup to trigger detection when the user places a point
 - **Module loading**: During development, add the `SEEGFellow/` directory to Slicer's additional module paths. No compilation needed for pure-Python scripted modules
 - **Dependencies**: numpy (bundled with Slicer), scipy (may need `pip_install('scipy')` via Slicer's Python). vtk and slicer are available in the Slicer environment
 
@@ -146,7 +283,6 @@ Creates a `vtkMRMLSegmentationNode` with one segment per contact:
 
 The modular design supports:
 
-- **DL-based auto-detection**: Implement a new `TrajectoryDetector` subclass that takes an electrode table (entry/target pairs) and a CT volume, runs a neural network, and returns all contacts for all electrodes at once
-- **CSV/spreadsheet export**: Add an export method to `Electrode` that writes contact labels + RAS coordinates
+- **DL-based auto-detection**: Implement a new detector that takes a CT volume, runs a neural network, and returns all contacts for all electrodes at once
 - **Atlas mapping**: Post-processing step to map contact positions to MNI space or brain atlas regions
 - **Batch processing**: The Logic class is GUI-independent, so it can be called from Slicer's Python console or scripted pipelines

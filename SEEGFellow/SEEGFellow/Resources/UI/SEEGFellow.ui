@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SEEGFellow</class>
+ <widget class="qMRMLWidget" name="SEEGFellow">
+  <layout class="QVBoxLayout" name="verticalLayout">
+
+   <!-- Step 1: Load Data -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="loadDataCollapsibleButton">
+     <property name="text"><string>Step 1: Load Data</string></property>
+     <layout class="QFormLayout" name="loadDataFormLayout">
+      <item row="0" column="0"><widget class="QLabel"><property name="text"><string>T1 MRI:</string></property></widget></item>
+      <item row="0" column="1"><widget class="ctkPathLineEdit" name="t1PathLineEdit"/></item>
+      <item row="1" column="0"><widget class="QLabel"><property name="text"><string>Post-implant CT:</string></property></widget></item>
+      <item row="1" column="1"><widget class="ctkPathLineEdit" name="ctPathLineEdit"/></item>
+      <item row="2" column="1"><widget class="QPushButton" name="loadButton"><property name="text"><string>Load Volumes</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 2: Rough Alignment -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="roughAlignCollapsibleButton">
+     <property name="text"><string>Step 2: Rough Alignment</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="roughAlignLayout">
+      <item><widget class="QLabel" name="roughAlignInstructions"><property name="text"><string>Use the Transforms module to roughly align the CT to the T1. Translate and rotate until the CT skull roughly overlaps the T1.</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      <item><widget class="QPushButton" name="createTransformButton"><property name="text"><string>Create Transform</string></property></widget></item>
+      <item><widget class="QPushButton" name="openTransformsButton"><property name="text"><string>Open Transforms Module</string></property></widget></item>
+      <item><widget class="QPushButton" name="roughAlignDoneButton"><property name="text"><string>Done — Proceed to Registration</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 3: Co-registration -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="registrationCollapsibleButton">
+     <property name="text"><string>Step 3: Co-registration</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="registrationLayout">
+      <item><widget class="QPushButton" name="registerButton"><property name="text"><string>Register (BRAINSFit Rigid)</string></property></widget></item>
+      <item><widget class="QProgressBar" name="registrationProgressBar"><property name="value"><number>0</number></property></widget></item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item><widget class="QPushButton" name="acceptRegistrationButton"><property name="text"><string>Accept</string></property></widget></item>
+        <item><widget class="QPushButton" name="rerunRegistrationButton"><property name="text"><string>Re-run</string></property></widget></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 4: Metal Segmentation -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="metalSegCollapsibleButton">
+     <property name="text"><string>Step 4: Metal Segmentation</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="metalSegLayout">
+      <item>
+       <layout class="QFormLayout">
+        <item row="0" column="0"><widget class="QLabel"><property name="text"><string>HU Threshold:</string></property></widget></item>
+        <item row="0" column="1"><widget class="ctkSliderWidget" name="thresholdSlider"><property name="minimum"><double>500</double></property><property name="maximum"><double>4000</double></property><property name="value"><double>2500</double></property><property name="singleStep"><double>50</double></property></widget></item>
+       </layout>
+      </item>
+      <item><widget class="QPushButton" name="segmentMetalButton"><property name="text"><string>Segment Metal</string></property></widget></item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item><widget class="QPushButton" name="acceptSegmentationButton"><property name="text"><string>Accept</string></property></widget></item>
+        <item><widget class="QPushButton" name="adjustSegmentationButton"><property name="text"><string>Adjust &amp; Re-run</string></property></widget></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 5: Electrode Detection -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="detectionCollapsibleButton">
+     <property name="text"><string>Step 5: Electrode Detection</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="detectionLayout">
+      <item><widget class="QPushButton" name="detectElectrodesButton"><property name="text"><string>Detect All Electrodes</string></property></widget></item>
+      <item><widget class="QTableWidget" name="electrodeTable"/></item>
+      <item><widget class="QPushButton" name="applyNamesButton"><property name="text"><string>Apply Names</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 6: Manual Fallback -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="manualFallbackCollapsibleButton">
+     <property name="text"><string>Manual Fallback (Seed-Point Mode)</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QFormLayout" name="manualFallbackLayout">
+      <item row="0" column="0"><widget class="QLabel"><property name="text"><string>Num. contacts:</string></property></widget></item>
+      <item row="0" column="1"><widget class="QSpinBox" name="numContactsSpinBox"><property name="minimum"><number>1</number></property><property name="maximum"><number>20</number></property><property name="value"><number>8</number></property></widget></item>
+      <item row="1" column="0"><widget class="QLabel"><property name="text"><string>Spacing (mm):</string></property></widget></item>
+      <item row="1" column="1"><widget class="QDoubleSpinBox" name="spacingSpinBox"><property name="minimum"><double>1.0</double></property><property name="maximum"><double>10.0</double></property><property name="value"><double>3.5</double></property><property name="singleStep"><double>0.1</double></property></widget></item>
+      <item row="2" column="1"><widget class="QPushButton" name="placeSeedButton"><property name="text"><string>Place Seed Point</string></property></widget></item>
+      <item row="3" column="1"><widget class="QPushButton" name="placeDirectionButton"><property name="text"><string>Set Direction Hint (optional)</string></property></widget></item>
+      <item row="4" column="1"><widget class="QPushButton" name="detectSingleButton"><property name="text"><string>Detect Contacts</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 7: Review &amp; Export -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="exportCollapsibleButton">
+     <property name="text"><string>Results &amp; Export</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="exportLayout">
+      <item><widget class="QTableWidget" name="contactTable"/></item>
+      <item><widget class="QPushButton" name="createSegmentationButton"><property name="text"><string>Create Segmentation</string></property></widget></item>
+      <item><widget class="QPushButton" name="exportCsvButton"><property name="text"><string>Export CSV</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Electrode List -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="electrodeListCollapsibleButton">
+     <property name="text"><string>Electrode List</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="electrodeListLayout">
+      <item><widget class="QListWidget" name="electrodeListWidget"/></item>
+      <item><widget class="QPushButton" name="deleteElectrodeButton"><property name="text"><string>Delete Selected Electrode</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+
+   <item><spacer name="verticalSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+  </layout>
+ </widget>
+</ui>

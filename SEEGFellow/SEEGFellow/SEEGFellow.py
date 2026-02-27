@@ -100,6 +100,27 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         )
         self.ui.contactTable.horizontalHeader().setStretchLastSection(True)
 
+        # Auto-restore from saved scene
+        self._try_restore_session()
+
+    def _try_restore_session(self):
+        """Attempt to reconnect to nodes from a saved Slicer scene."""
+        if not self.logic.try_restore_from_scene():
+            return
+
+        # Determine furthest-reached step and uncollapse that panel
+        has_brain = getattr(self.logic, "_head_mask", None) is not None
+        has_metal = getattr(self.logic, "_metal_mask", None) is not None
+
+        if has_metal:
+            self.ui.contactDetectionCollapsibleButton.collapsed = False
+        elif has_brain:
+            self.ui.metalThresholdCollapsibleButton.collapsed = False
+        else:
+            self.ui.intracranialMaskCollapsibleButton.collapsed = False
+
+        slicer.util.showStatusMessage("Restored session from scene.")
+
     def cleanup(self):
         self.logic.cleanup()
 
@@ -163,19 +184,20 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
 
     def _on_compute_head_mask_clicked(self):
         try:
-            slicer.util.showStatusMessage("Computing intracranial mask...")
+            slicer.util.showStatusMessage("Computing brain mask from MRI...")
             self.logic.run_intracranial_mask()
-            slicer.util.showStatusMessage("Intracranial mask computed.")
+            slicer.util.showStatusMessage("Brain parenchyma mask computed.")
         except Exception as e:
-            slicer.util.errorDisplay(f"Failed to compute head mask: {e}")
+            slicer.util.errorDisplay(f"Failed to compute brain mask: {e}")
 
     def _on_edit_head_mask_clicked(self):
         if self.logic._segmentation_node is None:
-            slicer.util.errorDisplay("Run 'Compute Intracranial Mask' first.")
+            slicer.util.errorDisplay("Run 'Compute Brain Mask' first.")
             return
         slicer.util.selectModule("SegmentEditor")
         editor_widget = slicer.modules.segmenteditor.widgetRepresentation().self()
         editor_widget.setSegmentationNode(self.logic._segmentation_node)
+        # Use CT as background so the user can see electrodes while editing
         editor_widget.setSourceVolumeNode(self.logic._ct_node)
 
     def _on_accept_head_mask_clicked(self):
@@ -393,6 +415,80 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._direction_node = None
 
     # -------------------------------------------------------------------------
+    # Session restore
+    # -------------------------------------------------------------------------
+
+    def try_restore_from_scene(self) -> bool:
+        """Reconnect to existing scene nodes from a saved Slicer scene.
+
+        Scans for nodes by name convention:
+        - Transform: "CT_to_T1_Registration"
+        - CT: scalar volume with that transform as parent
+        - T1: the other scalar volume
+        - Segmentation: "SEEGFellow Segmentation" (optional)
+
+        Returns True if CT + T1 + registration transform were found.
+        """
+        # --- Find registration transform ---
+        transform = slicer.util.getFirstNodeByClassByName(
+            "vtkMRMLLinearTransformNode", "CT_to_T1_Registration"
+        )
+        if transform is None:
+            return False
+
+        # --- Find CT (volume under the registration transform) ---
+        scene = slicer.mrmlScene
+        ct_node = None
+        other_volumes = []
+        n = scene.GetNumberOfNodesByClass("vtkMRMLScalarVolumeNode")
+        for i in range(n):
+            vol = scene.GetNthNodeByClass(i, "vtkMRMLScalarVolumeNode")
+            if vol.GetParentTransformNode() == transform:
+                if ct_node is not None:
+                    return False  # ambiguous: 2+ volumes under transform
+                ct_node = vol
+            else:
+                other_volumes.append(vol)
+
+        if ct_node is None or len(other_volumes) == 0:
+            return False
+
+        t1_node = other_volumes[0]
+
+        # --- Assign core nodes ---
+        self._registration_transform_node = transform
+        self._ct_node = ct_node
+        self._t1_node = t1_node
+
+        # --- Optionally restore segmentation and masks ---
+        seg_node = slicer.util.getFirstNodeByClassByName(
+            "vtkMRMLSegmentationNode", "SEEGFellow Segmentation"
+        )
+        if seg_node is not None:
+            self._segmentation_node = seg_node
+            seg = seg_node.GetSegmentation()
+
+            brain_id = seg.GetSegmentIdBySegmentName("Brain")
+            if brain_id:
+                import numpy as np
+
+                brain_array = slicer.util.arrayFromSegmentBinaryLabelmap(
+                    seg_node, brain_id, ct_node
+                )
+                self._head_mask = (brain_array > 0).astype(np.uint8)
+
+            metal_id = seg.GetSegmentIdBySegmentName("Metal")
+            if metal_id:
+                import numpy as np
+
+                metal_array = slicer.util.arrayFromSegmentBinaryLabelmap(
+                    seg_node, metal_id, ct_node
+                )
+                self._metal_mask = (metal_array > 0).astype(np.uint8)
+
+        return True
+
+    # -------------------------------------------------------------------------
     # Step 1: Load volumes
     # -------------------------------------------------------------------------
 
@@ -447,18 +543,87 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
     # -------------------------------------------------------------------------
 
     def run_intracranial_mask(self) -> None:
-        """Compute intracranial mask and display it as a segmentation segment.
+        """Compute brain parenchyma mask from the T1 MRI and display it.
+
+        The mask is computed in MRI space, then resampled into CT space so
+        it can be used to classify electrode contacts.  The T1 must already
+        be loaded (Step 1) and registered to the CT (Step 3).
 
         Example::
 
             logic.run_intracranial_mask()
         """
-        from SEEGFellowLib.metal_segmenter import compute_head_mask
-        from slicer.util import arrayFromVolume
+        import numpy as np
+        import vtk
+        from SEEGFellowLib.metal_segmenter import compute_brain_mask
+        from slicer.util import arrayFromVolume, updateVolumeFromArray
 
-        ct_array = arrayFromVolume(self._ct_node)
-        head_mask = compute_head_mask(ct_array)
+        if self._t1_node is None:
+            raise RuntimeError("T1 MRI not loaded. Complete Step 1 first.")
 
+        # --- Compute mask in MRI voxel space ---
+        t1_array = arrayFromVolume(self._t1_node)
+
+        # arrayFromVolume returns (K, J, I); spacing from node is (I, J, K)
+        spacing_ijk = self._t1_node.GetSpacing()  # (I, J, K)
+        voxel_size_kji = (spacing_ijk[2], spacing_ijk[1], spacing_ijk[0])
+
+        brain_mask_t1 = compute_brain_mask(t1_array, voxel_size_mm=voxel_size_kji)
+
+        print(
+            f"[SEEGFellow] Brain mask voxel count in MRI space: "
+            f"{np.sum(brain_mask_t1 > 0)}"
+        )
+
+        if not np.any(brain_mask_t1):
+            raise RuntimeError("Brain mask is empty – Otsu/erosion failed on this MRI.")
+
+        # --- Create a temporary labelmap in MRI space ---
+        # Clone geometry entirely via IJKToRAS (encodes origin+spacing+directions)
+        brain_label_node = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_BrainMask_MRI"
+        )
+        ijkToRAS = vtk.vtkMatrix4x4()
+        self._t1_node.GetIJKToRASMatrix(ijkToRAS)
+        brain_label_node.SetIJKToRASMatrix(ijkToRAS)
+
+        updateVolumeFromArray(brain_label_node, brain_mask_t1)
+
+        # Inherit any parent transform the T1 carries (e.g. from registration)
+        t1_transform = self._t1_node.GetParentTransformNode()
+        if t1_transform is not None:
+            brain_label_node.SetAndObserveTransformNodeID(t1_transform.GetID())
+
+        # Harden all transforms so world-space geometry is baked in
+        slicer.vtkSlicerTransformLogic.hardenTransform(brain_label_node)
+
+        # Also harden CT transform temporarily for correct resampling
+        ct_transform = self._ct_node.GetParentTransformNode()
+        ct_had_transform = ct_transform is not None
+        if ct_had_transform:
+            slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
+
+        # --- Resample into CT space ---
+        brain_label_ct = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_BrainMask_CT"
+        )
+        params = {
+            "inputVolume": brain_label_node.GetID(),
+            "referenceVolume": self._ct_node.GetID(),
+            "outputVolume": brain_label_ct.GetID(),
+            "interpolationMode": "NearestNeighbor",
+        }
+        slicer.cli.runSync(slicer.modules.resamplescalarvectordwivolume, None, params)
+
+        brain_mask_in_ct = np.array(arrayFromVolume(brain_label_ct), dtype=np.uint8)
+        brain_mask_in_ct = (brain_mask_in_ct > 0).astype(np.uint8)
+
+        print(
+            f"[SEEGFellow] Brain mask voxel count in CT space: "
+            f"{np.sum(brain_mask_in_ct > 0)}"
+        )
+
+        # --- Display as segmentation segment ---
         if self._segmentation_node is None:
             self._segmentation_node = slicer.mrmlScene.AddNewNodeByClass(
                 "vtkMRMLSegmentationNode", "SEEGFellow Segmentation"
@@ -468,22 +633,21 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                 self._ct_node
             )
 
-        # Inherit the CT's parent transform so the segmentation overlays correctly
-        ct_transform = self._ct_node.GetParentTransformNode()
-        if ct_transform is not None:
-            self._segmentation_node.SetAndObserveTransformNodeID(ct_transform.GetID())
-
         seg = self._segmentation_node.GetSegmentation()
-        existing_id = seg.GetSegmentIdBySegmentName("Intracranial")
+        existing_id = seg.GetSegmentIdBySegmentName("Brain")
         if existing_id:
             seg.RemoveSegment(existing_id)
 
-        segment_id = seg.AddEmptySegment("Intracranial", "Intracranial")
+        segment_id = seg.AddEmptySegment("Brain", "Brain")
         seg.GetSegment(segment_id).SetColor(0.0, 0.5, 1.0)
         slicer.util.updateSegmentBinaryLabelmapFromArray(
-            head_mask, self._segmentation_node, segment_id, self._ct_node
+            brain_mask_in_ct, self._segmentation_node, segment_id, self._ct_node
         )
-        self._head_mask = head_mask
+        self._head_mask = brain_mask_in_ct
+
+        # --- Clean up temporary nodes ---
+        slicer.mrmlScene.RemoveNode(brain_label_node)
+        slicer.mrmlScene.RemoveNode(brain_label_ct)
 
     def run_metal_threshold(self, threshold: float = 2500) -> None:
         """Threshold CT within intracranial mask and display as a segment.

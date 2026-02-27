@@ -26,6 +26,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
+        self._ensure_dependencies()
 
         # Load .ui file
         uiWidget = slicer.util.loadUI(self.resourcePath("UI/SEEGFellow.ui"))
@@ -123,6 +124,14 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
 
     def cleanup(self):
         self.logic.cleanup()
+
+    def _ensure_dependencies(self):
+        """Install nibabel and deepbet into Slicer's Python if not already present."""
+        try:
+            import nibabel  # noqa: F401
+            from deepbet import run_bet  # noqa: F401
+        except ImportError:
+            slicer.util.pip_install("nibabel deepbet")
 
     # -------------------------------------------------------------------------
     # Step 1: Load Data

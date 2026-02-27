@@ -468,6 +468,11 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                 self._ct_node
             )
 
+        # Inherit the CT's parent transform so the segmentation overlays correctly
+        ct_transform = self._ct_node.GetParentTransformNode()
+        if ct_transform is not None:
+            self._segmentation_node.SetAndObserveTransformNodeID(ct_transform.GetID())
+
         seg = self._segmentation_node.GetSegmentation()
         existing_id = seg.GetSegmentIdBySegmentName("Intracranial")
         if existing_id:

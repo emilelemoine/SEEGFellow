@@ -6,6 +6,7 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow", "SEEGFellow")
 )
 
+import pytest
 import numpy as np
 from SEEGFellowLib.metal_segmenter import threshold_volume
 from SEEGFellowLib.metal_segmenter import detect_contact_centers
@@ -100,12 +101,12 @@ class TestDetectContactCenters:
         assert len(detected) == 0
 
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from SEEGFellowLib.metal_segmenter import compute_brain_mask
 
 
 class TestComputeBrainMask:
-    def test_returns_binary_mask_from_deepbet(self, tmp_path):
+    def test_returns_binary_mask_from_deepbet(self):
         """compute_brain_mask should call deepbet and return a binary mask."""
         volume = np.random.rand(10, 20, 30).astype(np.float32)
         affine = np.eye(4)
@@ -126,7 +127,7 @@ class TestComputeBrainMask:
         assert result.dtype == np.uint8
         assert np.all(result == 1)
 
-    def test_empty_mask_raises(self, tmp_path):
+    def test_empty_mask_raises(self):
         """compute_brain_mask should raise if deepbet produces an empty mask."""
         volume = np.random.rand(10, 20, 30).astype(np.float32)
         affine = np.eye(4)
@@ -140,7 +141,5 @@ class TestComputeBrainMask:
             nib.save(nib.Nifti1Image(mask, affine), mask_paths[0])
 
         with patch("SEEGFellowLib.metal_segmenter.run_bet", fake_run_bet):
-            import pytest as pt
-
-            with pt.raises(RuntimeError, match="empty"):
+            with pytest.raises(RuntimeError, match="empty"):
                 compute_brain_mask(volume, affine)

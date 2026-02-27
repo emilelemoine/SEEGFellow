@@ -7,8 +7,15 @@ The MetalSegmenter class wraps these for use with Slicer volume nodes.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from scipy import ndimage
+
+try:
+    from deepbet import run_bet  # noqa: F401 – imported for patchability in tests
+except ImportError:  # deepbet not available (e.g. CI without GPU dependencies)
+    run_bet = None  # type: ignore[assignment]
 
 
 def threshold_volume(volume: np.ndarray, threshold: float = 2500) -> np.ndarray:
@@ -21,151 +28,60 @@ def threshold_volume(volume: np.ndarray, threshold: float = 2500) -> np.ndarray:
     return (volume >= threshold).astype(np.uint8)
 
 
-def _otsu_threshold(volume: np.ndarray, nbins: int = 256) -> float:
-    """Compute Otsu's threshold for a volume.
-
-    Args:
-        volume: Input array (any dtype, converted to float internally).
-        nbins: Number of histogram bins.
-
-    Returns:
-        Optimal threshold value that maximises inter-class variance.
-    """
-    vmin, vmax = float(volume.min()), float(volume.max())
-    if vmax == vmin:
-        return vmin
-    hist, bin_edges = np.histogram(volume.ravel(), bins=nbins, range=(vmin, vmax))
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-
-    hist = hist.astype(np.float64)
-    total = hist.sum()
-    if total == 0:
-        return vmin
-
-    w0 = np.cumsum(hist)
-    w1 = total - w0
-    mu0_num = np.cumsum(hist * bin_centers)
-
-    mu0 = np.divide(mu0_num, w0, out=np.zeros_like(w0), where=w0 > 0)
-    mu_total = mu0_num[-1]
-    mu1 = np.divide(mu_total - mu0_num, w1, out=np.zeros_like(w1), where=w1 > 0)
-
-    variance = w0 * w1 * (mu0 - mu1) ** 2
-    idx = int(np.argmax(variance))
-    return float(bin_centers[idx])
-
-
-def _largest_connected_component(mask: np.ndarray) -> np.ndarray:
-    """Keep only the largest connected component in a binary mask."""
-    labeled, n = ndimage.label(mask)
-    if n == 0:
-        return mask.astype(np.uint8)
-    sizes = ndimage.sum(mask, labeled, range(1, n + 1))
-    largest = int(np.argmax(sizes)) + 1
-    return (labeled == largest).astype(np.uint8)
-
-
-def _spherical_structuring_element(
-    radius_mm: float,
-    voxel_size_mm: tuple[float, float, float],
-) -> np.ndarray:
-    """Create an approximately spherical binary structuring element.
-
-    Accounts for anisotropic voxel spacing so that the physical radius
-    is honoured in every direction.
-
-    Args:
-        radius_mm: Desired radius in millimetres.
-        voxel_size_mm: (spacing_i, spacing_j, spacing_k) in mm.
-
-    Returns:
-        Binary uint8 array usable as a structuring element.
-    """
-    radii_vox = tuple(max(1, int(round(radius_mm / s))) for s in voxel_size_mm)
-    grid = np.mgrid[
-        -radii_vox[0] : radii_vox[0] + 1,
-        -radii_vox[1] : radii_vox[1] + 1,
-        -radii_vox[2] : radii_vox[2] + 1,
-    ]
-    # Normalise each axis so that 1.0 corresponds to the target radius
-    dist = np.sqrt(
-        (grid[0] * voxel_size_mm[0] / radius_mm) ** 2
-        + (grid[1] * voxel_size_mm[1] / radius_mm) ** 2
-        + (grid[2] * voxel_size_mm[2] / radius_mm) ** 2
-    )
-    return (dist <= 1.0).astype(np.uint8)
-
-
 def compute_brain_mask(
     volume: np.ndarray,
-    voxel_size_mm: tuple[float, float, float] = (1.0, 1.0, 1.0),
-    erosion_mm: float = 12.0,
-    dilation_mm: float = 10.0,
+    affine: np.ndarray,
+    threshold: float = 0.5,
 ) -> np.ndarray:
     """Create a binary mask of brain parenchyma from a T1-weighted MRI.
 
-    Algorithm
-    ---------
-    1. Otsu threshold to separate head from background air.
-    2. Largest connected component + hole-filling → head mask.
-    3. Erode by *erosion_mm* (via distance transform) to strip scalp,
-       skull and meninges.
-    4. Largest connected component of eroded volume → brain core seed.
-    5. Dilate brain core by *dilation_mm* (via distance transform),
-       intersected with the head mask, to recover the brain boundary
-       without leaking through skull.
-    6. Final hole-fill.
-
-    The slight deficit (erosion > dilation) provides a conservative mask
-    that stays within the inner table of the skull.
+    Uses deepbet (CNN-based skull stripping) for robust brain extraction.
+    The volume is saved to a temporary NIfTI file, processed by deepbet,
+    and the resulting mask is loaded back as a numpy array.
 
     Args:
         volume: T1 MRI array (3-D numpy, arbitrary intensity scale).
-        voxel_size_mm: Physical voxel dimensions (I, J, K) in mm.
-        erosion_mm: Erosion radius; must exceed the combined thickness
-            of scalp + skull (~10–14 mm in adults).
-        dilation_mm: Dilation radius to recover brain surface after
-            erosion.  Slightly less than *erosion_mm* to stay
-            conservatively inside the skull.
+        affine: 4x4 voxel-to-world (IJK-to-RAS) transformation matrix.
+        threshold: deepbet segmentation threshold (0-1, default 0.5).
 
     Returns:
         Binary uint8 mask (1 = brain parenchyma).
 
+    Raises:
+        RuntimeError: If the resulting brain mask is empty.
+
     Example::
 
-        brain = compute_brain_mask(t1_array, voxel_size_mm=(1.0, 1.0, 1.0))
+        brain = compute_brain_mask(t1_array, affine)
     """
-    # ---- Step 1: Otsu threshold -----------------------------------------
-    threshold = _otsu_threshold(volume)
-    foreground = volume > threshold
+    import tempfile
+    import nibabel as nib
 
-    # ---- Step 2: Head mask (largest CC, filled) --------------------------
-    filled = ndimage.binary_fill_holes(foreground)
-    head_mask = _largest_connected_component(filled.astype(np.uint8)).astype(bool)
-    head_mask = ndimage.binary_fill_holes(head_mask)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        input_path = os.path.join(tmp_dir, "t1.nii.gz")
+        brain_path = os.path.join(tmp_dir, "brain.nii.gz")
+        mask_path = os.path.join(tmp_dir, "mask.nii.gz")
+        tiv_path = os.path.join(tmp_dir, "tiv.csv")
 
-    # ---- Step 3: Erode to strip skull + scalp ---------------------------
-    # Distance from each True voxel to the nearest False voxel (boundary).
-    # Thresholding at erosion_mm is equivalent to a spherical erosion.
-    dist_inside = ndimage.distance_transform_edt(head_mask, sampling=voxel_size_mm)
-    brain_core = dist_inside >= erosion_mm
+        nib.save(nib.Nifti1Image(volume, affine), input_path)
 
-    # ---- Step 4: Largest CC of eroded mask → brain seed -----------------
-    brain_core = _largest_connected_component(brain_core.astype(np.uint8)).astype(bool)
-    if not np.any(brain_core):
-        # Erosion was too aggressive; fall back to head mask
-        return head_mask.astype(np.uint8)
+        run_bet(
+            [input_path],
+            [brain_path],
+            [mask_path],
+            [tiv_path],
+            threshold=threshold,
+            n_dilate=0,
+            no_gpu=True,
+        )
 
-    # ---- Step 5: Dilate back, constrained to head mask ------------------
-    # Distance from each False voxel to the nearest True voxel in brain_core.
-    # Thresholding the inverse EDT is equivalent to spherical dilation.
-    dist_outside = ndimage.distance_transform_edt(~brain_core, sampling=voxel_size_mm)
-    brain_mask = (dist_outside <= dilation_mm) & head_mask
+        mask_img = nib.load(mask_path)
+        mask = np.asarray(mask_img.dataobj, dtype=np.uint8)
 
-    # ---- Step 6: Fill residual holes ------------------------------------
-    brain_mask = ndimage.binary_fill_holes(brain_mask)
+    if not np.any(mask):
+        raise RuntimeError("Brain mask is empty – deepbet produced no output.")
 
-    return brain_mask.astype(np.uint8)
+    return (mask > 0).astype(np.uint8)
 
 
 def compute_head_mask(volume: np.ndarray) -> np.ndarray:

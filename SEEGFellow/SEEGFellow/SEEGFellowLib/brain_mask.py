@@ -122,16 +122,21 @@ class SynthStripBrainMask:
 
     name = "SynthStrip (FreeSurfer)"
 
-    def is_available(self) -> bool:
-        """Return True if mri_synthstrip is found on PATH or in FREESURFER_HOME."""
-        if shutil.which("mri_synthstrip") is not None:
-            return True
+    def _find_executable(self) -> str | None:
+        """Return the path to mri_synthstrip, or None if not found."""
+        exe = shutil.which("mri_synthstrip")
+        if exe is not None:
+            return exe
         freesurfer_home = os.environ.get("FREESURFER_HOME", "")
         if freesurfer_home:
             candidate = os.path.join(freesurfer_home, "bin", "mri_synthstrip")
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return True
-        return False
+                return candidate
+        return None
+
+    def is_available(self) -> bool:
+        """Return True if mri_synthstrip is found on PATH or in FREESURFER_HOME."""
+        return self._find_executable() is not None
 
     def compute(self, volume: np.ndarray, affine: np.ndarray) -> np.ndarray:
         """Compute brain mask using mri_synthstrip.
@@ -155,15 +160,11 @@ class SynthStripBrainMask:
         """
         import nibabel as nib  # noqa: PLC0415 – kept lazy for clarity
 
-        if not self.is_available():
+        executable = self._find_executable()
+        if executable is None:
             raise RuntimeError(
                 "mri_synthstrip not found. Install FreeSurfer or add mri_synthstrip to PATH."
             )
-
-        executable = shutil.which("mri_synthstrip")
-        if executable is None:
-            freesurfer_home = os.environ.get("FREESURFER_HOME", "")
-            executable = os.path.join(freesurfer_home, "bin", "mri_synthstrip")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = os.path.join(tmpdir, "input.nii.gz")

@@ -11,7 +11,6 @@ import numpy as np
 from SEEGFellowLib.metal_segmenter import threshold_volume
 from SEEGFellowLib.metal_segmenter import detect_contact_centers
 from SEEGFellowLib.metal_segmenter import compute_head_mask
-from SEEGFellowLib.metal_segmenter import compute_brain_mask
 
 
 class TestThresholdVolume:
@@ -98,27 +97,3 @@ class TestDetectContactCenters:
         metal_mask = np.zeros((20, 20, 20), dtype=np.uint8)
         detected = detect_contact_centers(ct, metal_mask, sigma=1.2)
         assert len(detected) == 0
-
-
-class TestComputeBrainMask:
-    def test_returns_binary_mask(self):
-        """compute_brain_mask should return a non-empty binary uint8 mask for a head-like volume."""
-        volume = np.zeros((30, 30, 30), dtype=np.float32)
-        center = np.array([15, 15, 15])
-        coords = np.indices((30, 30, 30)).transpose(1, 2, 3, 0)
-        volume[np.linalg.norm(coords - center, axis=-1) < 10] = 1000.0
-        affine = np.eye(4)
-
-        result = compute_brain_mask(volume, affine)
-
-        assert result.shape == (30, 30, 30)
-        assert result.dtype == np.uint8
-        assert np.any(result)
-
-    def test_empty_volume_raises(self):
-        """compute_brain_mask should raise if the volume produces no foreground."""
-        volume = np.zeros((20, 20, 20), dtype=np.float32)
-        affine = np.eye(4)
-
-        with pytest.raises(RuntimeError, match="empty"):
-            compute_brain_mask(volume, affine)

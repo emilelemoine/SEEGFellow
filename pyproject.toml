@@ -10,6 +10,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest",
+    "scipy>=1.13.1",
 ]
 
 [tool.pytest.ini_options]

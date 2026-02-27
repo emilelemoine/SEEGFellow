@@ -55,6 +55,7 @@ def compute_brain_mask(
         brain = compute_brain_mask(t1_array, affine)
     """
     import tempfile
+    import warnings
     import nibabel as nib
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -65,15 +66,19 @@ def compute_brain_mask(
 
         nib.save(nib.Nifti1Image(volume, affine), input_path)
 
-        run_bet(
-            [input_path],
-            [brain_path],
-            [mask_path],
-            [tiv_path],
-            threshold=threshold,
-            n_dilate=0,
-            no_gpu=True,
-        )
+        # Suppress the NumPy 1.x/2.x ABI warning emitted by torch 2.2.x.
+        # The warning is cosmetic for deepbet's CPU inference path.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", ".*NumPy 1.x.*")
+            run_bet(
+                [input_path],
+                [brain_path],
+                [mask_path],
+                [tiv_path],
+                threshold=threshold,
+                n_dilate=0,
+                no_gpu=True,
+            )
 
         mask_img = nib.load(mask_path)
         mask = np.asarray(mask_img.dataobj, dtype=np.uint8)

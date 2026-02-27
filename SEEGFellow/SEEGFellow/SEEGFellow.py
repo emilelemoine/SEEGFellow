@@ -131,8 +131,9 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             import nibabel  # noqa: F401
             from deepbet import run_bet  # noqa: F401
         except ImportError:
-            # torch>=2.3.0 is required for NumPy 2.x compatibility (Slicer ships NumPy 2.x)
-            slicer.util.pip_install("nibabel torch>=2.3.0 deepbet")
+            # torch 2.2.x is the latest available for macOS Intel (Slicer's platform);
+            # 2.3.0+ dropped Intel macOS wheels.
+            slicer.util.pip_install("nibabel torch==2.2.2 deepbet")
 
     # -------------------------------------------------------------------------
     # Step 1: Load Data

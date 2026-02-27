@@ -207,6 +207,9 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     # -------------------------------------------------------------------------
 
     def _on_compute_head_mask_clicked(self):
+        if not self._brain_mask_strategies:
+            slicer.util.errorDisplay("No brain mask method available.")
+            return
         idx = self._brainMaskMethodComboBox.currentIndex
         strategy = self._brain_mask_strategies[idx]
         try:

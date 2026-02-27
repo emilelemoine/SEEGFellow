@@ -109,8 +109,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             return
 
         # Determine furthest-reached step and uncollapse that panel
-        has_brain = getattr(self.logic, "_head_mask", None) is not None
-        has_metal = getattr(self.logic, "_metal_mask", None) is not None
+        has_brain = self.logic._head_mask is not None
+        has_metal = self.logic._metal_mask is not None
 
         if has_metal:
             self.ui.contactDetectionCollapsibleButton.collapsed = False
@@ -402,6 +402,8 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._seed_node = None
         self._direction_node = None
         self._segmentation_node = None
+        self._head_mask = None
+        self._metal_mask = None
 
     def cleanup(self):
         """Remove temporary markup nodes."""
@@ -450,7 +452,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
             else:
                 other_volumes.append(vol)
 
-        if ct_node is None or len(other_volumes) == 0:
+        if ct_node is None or len(other_volumes) != 1:
             return False
 
         t1_node = other_volumes[0]
@@ -464,14 +466,14 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         seg_node = slicer.util.getFirstNodeByClassByName(
             "vtkMRMLSegmentationNode", "SEEGFellow Segmentation"
         )
+        import numpy as np
+
         if seg_node is not None:
             self._segmentation_node = seg_node
             seg = seg_node.GetSegmentation()
 
             brain_id = seg.GetSegmentIdBySegmentName("Brain")
             if brain_id:
-                import numpy as np
-
                 brain_array = slicer.util.arrayFromSegmentBinaryLabelmap(
                     seg_node, brain_id, ct_node
                 )
@@ -479,8 +481,6 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
             metal_id = seg.GetSegmentIdBySegmentName("Metal")
             if metal_id:
-                import numpy as np
-
                 metal_array = slicer.util.arrayFromSegmentBinaryLabelmap(
                     seg_node, metal_id, ct_node
                 )
@@ -661,7 +661,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         ct_array = arrayFromVolume(self._ct_node)
         metal_mask = threshold_volume(ct_array, threshold)
-        if getattr(self, "_head_mask", None) is not None:
+        if self._head_mask is not None:
             metal_mask = metal_mask & self._head_mask
 
         seg = self._segmentation_node.GetSegmentation()

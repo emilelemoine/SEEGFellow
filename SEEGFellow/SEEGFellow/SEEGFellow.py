@@ -26,7 +26,6 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
-        self._ensure_dependencies()
 
         # Load .ui file
         uiWidget = slicer.util.loadUI(self.resourcePath("UI/SEEGFellow.ui"))
@@ -34,7 +33,6 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui = slicer.util.childWidgetVariables(uiWidget)
 
         self.logic = SEEGFellowLogic()
-
         # Step 1: Load Data
         self.ui.loadButton.clicked.connect(self._on_load_clicked)
 
@@ -125,16 +123,6 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     def cleanup(self):
         self.logic.cleanup()
 
-    def _ensure_dependencies(self):
-        """Install nibabel and deepbet into Slicer's Python if not already present."""
-        try:
-            import nibabel  # noqa: F401
-            from deepbet import run_bet  # noqa: F401
-        except ImportError:
-            # torch 2.2.x is the latest available for macOS Intel (Slicer's platform);
-            # 2.3.0+ dropped Intel macOS wheels.
-            slicer.util.pip_install("nibabel torch==2.2.2 deepbet")
-
     # -------------------------------------------------------------------------
     # Step 1: Load Data
     # -------------------------------------------------------------------------
@@ -207,9 +195,10 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             return
         slicer.util.selectModule("SegmentEditor")
         editor_widget = slicer.modules.segmenteditor.widgetRepresentation().self()
-        editor_widget.setSegmentationNode(self.logic._segmentation_node)
+        # .editor is the underlying qMRMLSegmentEditorWidget
+        editor_widget.editor.setSegmentationNode(self.logic._segmentation_node)
         # Use CT as background so the user can see electrodes while editing
-        editor_widget.setSourceVolumeNode(self.logic._ct_node)
+        editor_widget.editor.setSourceVolumeNode(self.logic._ct_node)
 
     def _on_accept_head_mask_clicked(self):
         self.ui.metalThresholdCollapsibleButton.collapsed = False
@@ -246,8 +235,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             return
         slicer.util.selectModule("SegmentEditor")
         editor_widget = slicer.modules.segmenteditor.widgetRepresentation().self()
-        editor_widget.setSegmentationNode(self.logic._segmentation_node)
-        editor_widget.setSourceVolumeNode(self.logic._ct_node)
+        editor_widget.editor.setSegmentationNode(self.logic._segmentation_node)
+        editor_widget.editor.setSourceVolumeNode(self.logic._ct_node)
 
     def _on_accept_metal_mask_clicked(self):
         self.ui.contactDetectionCollapsibleButton.collapsed = False
@@ -575,7 +564,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         # --- Compute mask in MRI voxel space ---
         t1_array = arrayFromVolume(self._t1_node)
 
-        # Extract the 4x4 IJK-to-RAS affine for NIfTI export
+        # Extract the 4x4 IJK-to-RAS affine (needed by scipy brain extraction)
         ijkToRAS = vtk.vtkMatrix4x4()
         self._t1_node.GetIJKToRASMatrix(ijkToRAS)
         affine = np.array(
@@ -588,9 +577,6 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
             f"[SEEGFellow] Brain mask voxel count in MRI space: "
             f"{np.sum(brain_mask_t1 > 0)}"
         )
-
-        if not np.any(brain_mask_t1):
-            raise RuntimeError("Brain mask is empty – deepbet failed on this MRI.")
 
         # --- Create a temporary labelmap in MRI space ---
         # Clone geometry entirely via IJKToRAS (encodes origin+spacing+directions)
@@ -608,13 +594,18 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         if t1_transform is not None:
             brain_label_node.SetAndObserveTransformNodeID(t1_transform.GetID())
 
-        # Harden all transforms so world-space geometry is baked in
+        # Harden all transforms on brain_label_node so it is in pure world (RAS) space
         slicer.vtkSlicerTransformLogic.hardenTransform(brain_label_node)
 
-        # Also harden CT transform temporarily for correct resampling
+        # The resamplescalarvectordwivolume CLI reads only the local IJKToRAS of the
+        # reference volume (it does not follow parent transforms).  We must bake the
+        # CT's registration transform into its geometry for the resampling, then
+        # fully restore the node so the scene is not corrupted.
+        ct_ijk_to_ras_orig = vtk.vtkMatrix4x4()
+        self._ct_node.GetIJKToRASMatrix(ct_ijk_to_ras_orig)
         ct_transform = self._ct_node.GetParentTransformNode()
-        ct_had_transform = ct_transform is not None
-        if ct_had_transform:
+        ct_transform_id = ct_transform.GetID() if ct_transform is not None else None
+        if ct_transform_id is not None:
             slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
 
         # --- Resample into CT space ---
@@ -623,11 +614,16 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         )
         params = {
             "inputVolume": brain_label_node.GetID(),
-            "referenceVolume": self._ct_node.GetID(),
+            "referenceVolume": self._ct_node.GetID(),  # hardened → world-space geometry
             "outputVolume": brain_label_ct.GetID(),
             "interpolationMode": "NearestNeighbor",
         }
         slicer.cli.runSync(slicer.modules.resamplescalarvectordwivolume, None, params)
+
+        # Fully restore CT: reset the baked geometry and re-attach the original transform
+        if ct_transform_id is not None:
+            self._ct_node.SetIJKToRASMatrix(ct_ijk_to_ras_orig)
+            self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
 
         brain_mask_in_ct = np.array(arrayFromVolume(brain_label_ct), dtype=np.uint8)
         brain_mask_in_ct = (brain_mask_in_ct > 0).astype(np.uint8)
@@ -654,8 +650,10 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         segment_id = seg.AddEmptySegment("Brain", "Brain")
         seg.GetSegment(segment_id).SetColor(0.0, 0.5, 1.0)
+        # brain_label_ct carries world-space geometry (its IJKToRAS is the hardened
+        # CT transform), so the stored segment aligns with the CT in world space.
         slicer.util.updateSegmentBinaryLabelmapFromArray(
-            brain_mask_in_ct, self._segmentation_node, segment_id, self._ct_node
+            brain_mask_in_ct, self._segmentation_node, segment_id, brain_label_ct
         )
         self._head_mask = brain_mask_in_ct
 
@@ -670,6 +668,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
             logic.run_metal_threshold(threshold=2500)
         """
+        import vtk
         from SEEGFellowLib.metal_segmenter import threshold_volume
         from slicer.util import arrayFromVolume
 
@@ -685,9 +684,25 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         segment_id = seg.AddEmptySegment("Metal", "Metal")
         seg.GetSegment(segment_id).SetColor(1.0, 1.0, 0.0)
+
+        # updateSegmentBinaryLabelmapFromArray uses only the local IJKToRAS of the
+        # reference node (parent transforms are not followed).  Harden the CT
+        # temporarily so the segment is stored in world space, matching the brain mask.
+        ct_ijk_to_ras_orig = vtk.vtkMatrix4x4()
+        self._ct_node.GetIJKToRASMatrix(ct_ijk_to_ras_orig)
+        ct_transform = self._ct_node.GetParentTransformNode()
+        ct_transform_id = ct_transform.GetID() if ct_transform is not None else None
+        if ct_transform_id is not None:
+            slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
+
         slicer.util.updateSegmentBinaryLabelmapFromArray(
             metal_mask, self._segmentation_node, segment_id, self._ct_node
         )
+
+        if ct_transform_id is not None:
+            self._ct_node.SetIJKToRASMatrix(ct_ijk_to_ras_orig)
+            self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
+
         self._metal_mask = metal_mask
 
     def run_electrode_detection(

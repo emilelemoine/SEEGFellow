@@ -7,15 +7,8 @@ The MetalSegmenter class wraps these for use with Slicer volume nodes.
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 from scipy import ndimage
-
-try:
-    from deepbet import run_bet  # noqa: F401 – imported for patchability in tests
-except ImportError:  # deepbet not available (e.g. CI without GPU dependencies)
-    run_bet = None  # type: ignore[assignment]
 
 
 def threshold_volume(volume: np.ndarray, threshold: float = 2500) -> np.ndarray:
@@ -28,21 +21,53 @@ def threshold_volume(volume: np.ndarray, threshold: float = 2500) -> np.ndarray:
     return (volume >= threshold).astype(np.uint8)
 
 
+def _compute_brain_mask_scipy(
+    volume: np.ndarray,
+    affine: np.ndarray,
+) -> np.ndarray:
+    """Brain extraction using morphological operations on T1 MRI.
+
+    Quality is lower than CNN-based methods but sufficient as an initial mask
+    that the user can refine in the Segment Editor.
+
+    Example::
+
+        mask = _compute_brain_mask_scipy(t1_array, affine)
+    """
+    # Voxel size (mm) from affine column magnitudes – needed to pick erosion depth
+    voxel_sizes = np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
+    min_voxel_mm = float(np.clip(voxel_sizes.min(), 0.1, None))
+
+    # Threshold at 5 % of max to exclude near-zero background (air in T1)
+    foreground = volume > volume.max() * 0.05
+    filled = ndimage.binary_fill_holes(ndimage.binary_closing(foreground, iterations=2))
+
+    # Keep the largest connected component (the head)
+    labeled, n = ndimage.label(filled)
+    if n == 0:
+        return foreground.astype(np.uint8)
+    sizes = ndimage.sum(filled, labeled, range(1, n + 1))
+    head = labeled == (int(np.argmax(sizes)) + 1)
+
+    # Erode ~5 mm to strip the skull
+    erosion_voxels = max(1, int(round(5.0 / min_voxel_mm)))
+    brain = ndimage.binary_erosion(head, iterations=erosion_voxels)
+
+    return brain.astype(np.uint8)
+
+
 def compute_brain_mask(
     volume: np.ndarray,
     affine: np.ndarray,
-    threshold: float = 0.5,
 ) -> np.ndarray:
     """Create a binary mask of brain parenchyma from a T1-weighted MRI.
 
-    Uses deepbet (CNN-based skull stripping) for robust brain extraction.
-    The volume is saved to a temporary NIfTI file, processed by deepbet,
-    and the resulting mask is loaded back as a numpy array.
+    Uses scipy morphological operations (thresholding, closing, fill holes,
+    largest-component selection, skull erosion).
 
     Args:
         volume: T1 MRI array (3-D numpy, arbitrary intensity scale).
         affine: 4x4 voxel-to-world (IJK-to-RAS) transformation matrix.
-        threshold: deepbet segmentation threshold (0-1, default 0.5).
 
     Returns:
         Binary uint8 mask (1 = brain parenchyma).
@@ -54,39 +79,12 @@ def compute_brain_mask(
 
         brain = compute_brain_mask(t1_array, affine)
     """
-    import tempfile
-    import warnings
-    import nibabel as nib
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        input_path = os.path.join(tmp_dir, "t1.nii.gz")
-        brain_path = os.path.join(tmp_dir, "brain.nii.gz")
-        mask_path = os.path.join(tmp_dir, "mask.nii.gz")
-        tiv_path = os.path.join(tmp_dir, "tiv.csv")
-
-        nib.save(nib.Nifti1Image(volume, affine), input_path)
-
-        # Suppress the NumPy 1.x/2.x ABI warning emitted by torch 2.2.x.
-        # The warning is cosmetic for deepbet's CPU inference path.
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", ".*NumPy 1.x.*")
-            run_bet(
-                [input_path],
-                [brain_path],
-                [mask_path],
-                [tiv_path],
-                threshold=threshold,
-                n_dilate=0,
-                no_gpu=True,
-            )
-
-        mask_img = nib.load(mask_path)
-        mask = np.asarray(mask_img.dataobj, dtype=np.uint8)
+    mask = _compute_brain_mask_scipy(volume, affine)
 
     if not np.any(mask):
-        raise RuntimeError("Brain mask is empty – deepbet produced no output.")
+        raise RuntimeError("Brain mask is empty – brain extraction produced no output.")
 
-    return (mask > 0).astype(np.uint8)
+    return mask
 
 
 def compute_head_mask(volume: np.ndarray) -> np.ndarray:

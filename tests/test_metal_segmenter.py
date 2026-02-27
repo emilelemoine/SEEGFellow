@@ -8,7 +8,6 @@ sys.path.insert(
 
 import pytest
 import numpy as np
-from unittest.mock import patch
 from SEEGFellowLib.metal_segmenter import threshold_volume
 from SEEGFellowLib.metal_segmenter import detect_contact_centers
 from SEEGFellowLib.metal_segmenter import compute_head_mask
@@ -102,40 +101,24 @@ class TestDetectContactCenters:
 
 
 class TestComputeBrainMask:
-    def test_returns_binary_mask_from_deepbet(self):
-        """compute_brain_mask should call deepbet and return a binary mask."""
-        volume = np.random.rand(10, 20, 30).astype(np.float32)
+    def test_returns_binary_mask(self):
+        """compute_brain_mask should return a non-empty binary uint8 mask for a head-like volume."""
+        volume = np.zeros((30, 30, 30), dtype=np.float32)
+        center = np.array([15, 15, 15])
+        coords = np.indices((30, 30, 30)).transpose(1, 2, 3, 0)
+        volume[np.linalg.norm(coords - center, axis=-1) < 10] = 1000.0
         affine = np.eye(4)
 
-        # Mock deepbet.run_bet to write a mask file filled with ones
-        def fake_run_bet(
-            input_paths, brain_paths, mask_paths, tiv_paths, threshold, n_dilate, no_gpu
-        ):
-            import nibabel as nib
+        result = compute_brain_mask(volume, affine)
 
-            mask = np.ones((10, 20, 30), dtype=np.uint8)
-            nib.save(nib.Nifti1Image(mask, affine), mask_paths[0])
-
-        with patch("SEEGFellowLib.metal_segmenter.run_bet", fake_run_bet):
-            result = compute_brain_mask(volume, affine)
-
-        assert result.shape == (10, 20, 30)
+        assert result.shape == (30, 30, 30)
         assert result.dtype == np.uint8
-        assert np.all(result == 1)
+        assert np.any(result)
 
-    def test_empty_mask_raises(self):
-        """compute_brain_mask should raise if deepbet produces an empty mask."""
-        volume = np.random.rand(10, 20, 30).astype(np.float32)
+    def test_empty_volume_raises(self):
+        """compute_brain_mask should raise if the volume produces no foreground."""
+        volume = np.zeros((20, 20, 20), dtype=np.float32)
         affine = np.eye(4)
 
-        def fake_run_bet(
-            input_paths, brain_paths, mask_paths, tiv_paths, threshold, n_dilate, no_gpu
-        ):
-            import nibabel as nib
-
-            mask = np.zeros((10, 20, 30), dtype=np.uint8)
-            nib.save(nib.Nifti1Image(mask, affine), mask_paths[0])
-
-        with patch("SEEGFellowLib.metal_segmenter.run_bet", fake_run_bet):
-            with pytest.raises(RuntimeError, match="empty"):
-                compute_brain_mask(volume, affine)
+        with pytest.raises(RuntimeError, match="empty"):
+            compute_brain_mask(volume, affine)

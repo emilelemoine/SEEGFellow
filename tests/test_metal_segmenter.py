@@ -8,8 +8,11 @@ sys.path.insert(
 
 import pytest
 import numpy as np
+from unittest.mock import patch
 from SEEGFellowLib.metal_segmenter import threshold_volume
 from SEEGFellowLib.metal_segmenter import detect_contact_centers
+from SEEGFellowLib.metal_segmenter import compute_head_mask
+from SEEGFellowLib.metal_segmenter import compute_brain_mask
 
 
 class TestThresholdVolume:
@@ -26,9 +29,6 @@ class TestThresholdVolume:
         vol[5, 5, 5] = 2000.0
         assert threshold_volume(vol, threshold=1500)[5, 5, 5] == 1
         assert threshold_volume(vol, threshold=2500)[5, 5, 5] == 0
-
-
-from SEEGFellowLib.metal_segmenter import compute_head_mask
 
 
 class TestComputeHeadMask:
@@ -99,10 +99,6 @@ class TestDetectContactCenters:
         metal_mask = np.zeros((20, 20, 20), dtype=np.uint8)
         detected = detect_contact_centers(ct, metal_mask, sigma=1.2)
         assert len(detected) == 0
-
-
-from unittest.mock import patch
-from SEEGFellowLib.metal_segmenter import compute_brain_mask
 
 
 class TestComputeBrainMask:

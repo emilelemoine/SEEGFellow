@@ -49,6 +49,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui.rerunRegistrationButton.clicked.connect(self._on_register_clicked)
 
         # Step 4a: Intracranial Mask
+        self._setup_brain_mask_combo()
         self.ui.computeHeadMaskButton.clicked.connect(
             self._on_compute_head_mask_clicked
         )
@@ -101,6 +102,30 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
 
         # Auto-restore from saved scene
         self._try_restore_session()
+
+    def _setup_brain_mask_combo(self):
+        """Populate the brain mask strategy combo box with available strategies.
+
+        Inserts a QComboBox above the 'Compute Intracranial Mask' button,
+        listing only strategies where is_available() returns True.
+        """
+        from qt import QComboBox, QLabel
+
+        from SEEGFellowLib.brain_mask import get_available_strategies
+
+        strategies = [s for s in get_available_strategies() if s.is_available()]
+        self._brain_mask_strategies = strategies
+
+        self._brainMaskMethodComboBox = QComboBox()
+        for strategy in strategies:
+            self._brainMaskMethodComboBox.addItem(strategy.name)
+
+        # Insert label + combo box before the "Compute Intracranial Mask" button
+        button = self.ui.computeHeadMaskButton
+        layout = button.parent().layout()
+        button_index = layout.indexOf(button)
+        layout.insertWidget(button_index, QLabel("Method:"))
+        layout.insertWidget(button_index + 1, self._brainMaskMethodComboBox)
 
     def _try_restore_session(self):
         """Attempt to reconnect to nodes from a saved Slicer scene."""
@@ -182,9 +207,13 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     # -------------------------------------------------------------------------
 
     def _on_compute_head_mask_clicked(self):
+        idx = self._brainMaskMethodComboBox.currentIndex
+        strategy = self._brain_mask_strategies[idx]
         try:
-            slicer.util.showStatusMessage("Computing brain mask from MRI...")
-            self.logic.run_intracranial_mask()
+            slicer.util.showStatusMessage(
+                f"Computing brain mask from MRI ({strategy.name})..."
+            )
+            self.logic.run_intracranial_mask(strategy=strategy)
             slicer.util.showStatusMessage("Brain parenchyma mask computed.")
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to compute brain mask: {e}")
@@ -542,12 +571,17 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
     # Step 4: Electrode detection
     # -------------------------------------------------------------------------
 
-    def run_intracranial_mask(self) -> None:
+    def run_intracranial_mask(self, strategy=None) -> None:
         """Compute brain parenchyma mask from the T1 MRI and display it.
 
-        The mask is computed in MRI space, then resampled into CT space so
-        it can be used to classify electrode contacts.  The T1 must already
-        be loaded (Step 1) and registered to the CT (Step 3).
+        The mask is computed in MRI space using the given strategy, then
+        resampled into CT space so it can be used to classify electrode
+        contacts.  The T1 must already be loaded (Step 1) and registered
+        to the CT (Step 3).
+
+        Args:
+            strategy: A BrainMaskStrategy instance.  Defaults to
+                ScipyBrainMask if not provided.
 
         Example::
 
@@ -555,8 +589,12 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         """
         import numpy as np
         import vtk
-        from SEEGFellowLib.metal_segmenter import compute_brain_mask
         from slicer.util import arrayFromVolume, updateVolumeFromArray
+
+        if strategy is None:
+            from SEEGFellowLib.brain_mask import ScipyBrainMask
+
+            strategy = ScipyBrainMask()
 
         if self._t1_node is None:
             raise RuntimeError("T1 MRI not loaded. Complete Step 1 first.")
@@ -564,14 +602,14 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         # --- Compute mask in MRI voxel space ---
         t1_array = arrayFromVolume(self._t1_node)
 
-        # Extract the 4x4 IJK-to-RAS affine (needed by scipy brain extraction)
+        # Extract the 4x4 IJK-to-RAS affine (needed by brain extraction)
         ijkToRAS = vtk.vtkMatrix4x4()
         self._t1_node.GetIJKToRASMatrix(ijkToRAS)
         affine = np.array(
             [[ijkToRAS.GetElement(r, c) for c in range(4)] for r in range(4)]
         )
 
-        brain_mask_t1 = compute_brain_mask(t1_array, affine)
+        brain_mask_t1 = strategy.compute(t1_array, affine)
 
         print(
             f"[SEEGFellow] Brain mask voxel count in MRI space: "

@@ -1,3 +1,9 @@
+from SEEGFellowLib.brain_mask import (
+    BrainMaskStrategy,
+    ScipyBrainMask,
+    SynthStripBrainMask,
+    get_available_strategies,
+)
 from SEEGFellowLib.electrode_model import Contact, Electrode, ElectrodeParams
 from SEEGFellowLib.metal_segmenter import (
     compute_head_mask,

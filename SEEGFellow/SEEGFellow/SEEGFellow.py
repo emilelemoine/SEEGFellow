@@ -131,7 +131,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             import nibabel  # noqa: F401
             from deepbet import run_bet  # noqa: F401
         except ImportError:
-            slicer.util.pip_install("nibabel deepbet")
+            # torch>=2.3.0 is required for NumPy 2.x compatibility (Slicer ships NumPy 2.x)
+            slicer.util.pip_install("nibabel torch>=2.3.0 deepbet")
 
     # -------------------------------------------------------------------------
     # Step 1: Load Data

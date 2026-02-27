@@ -65,7 +65,7 @@ class ScipyBrainMask:
         mask = strategy.compute(volume, affine)
     """
 
-    name = "scipy"
+    name = "Scipy (morphological)"
 
     def is_available(self) -> bool:
         return True
@@ -84,6 +84,9 @@ class ScipyBrainMask:
 
             mask = ScipyBrainMask().compute(t1_array, np.eye(4))
         """
+        if volume.size == 0:
+            raise ValueError("volume is empty")
+
         voxel_sizes = np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
         min_voxel_mm = float(np.clip(voxel_sizes.min(), 0.1, None))
 
@@ -94,7 +97,7 @@ class ScipyBrainMask:
 
         labeled, n = ndimage.label(filled)
         if n == 0:
-            return foreground.astype(np.uint8)
+            raise RuntimeError("brain mask is empty")
         sizes = ndimage.sum(filled, labeled, range(1, n + 1))
         head = labeled == (int(np.argmax(sizes)) + 1)
 
@@ -117,7 +120,7 @@ class SynthStripBrainMask:
             mask = strategy.compute(volume, affine)
     """
 
-    name = "synthstrip"
+    name = "SynthStrip (FreeSurfer)"
 
     def is_available(self) -> bool:
         """Return True if mri_synthstrip is found on PATH or in FREESURFER_HOME."""
@@ -182,7 +185,10 @@ class SynthStripBrainMask:
             mask_img = nib.load(mask_path)
             mask = np.asarray(mask_img.dataobj)
 
-        return (mask > 0).astype(np.uint8)
+        result = (mask > 0).astype(np.uint8)
+        if result.sum() == 0:
+            raise RuntimeError("brain mask is empty")
+        return result
 
 
 def get_available_strategies() -> list[BrainMaskStrategy]:
@@ -193,7 +199,7 @@ def get_available_strategies() -> list[BrainMaskStrategy]:
         strategies = get_available_strategies()
         mask = strategies[0].compute(volume, affine)
     """
-    all_strategies: list[BrainMaskStrategy] = [ScipyBrainMask(), SynthStripBrainMask()]
+    all_strategies: list[BrainMaskStrategy] = [SynthStripBrainMask(), ScipyBrainMask()]
     available = [s for s in all_strategies if s.is_available()]
     unavailable = [s for s in all_strategies if not s.is_available()]
     return available + unavailable

@@ -53,6 +53,16 @@ class TestScipyBrainMask:
         # 2 mm voxels → fewer erosion iterations → larger brain mask
         assert mask_2mm.sum() >= mask_1mm.sum()
 
+    def test_compute_raises_on_empty_volume(self):
+        with pytest.raises(ValueError, match="volume is empty"):
+            ScipyBrainMask().compute(np.zeros((0, 0, 0), dtype=np.float32), np.eye(4))
+
+    def test_compute_raises_on_empty_mask(self):
+        """All-zero volume produces no foreground voxels → brain mask is empty."""
+        volume = np.zeros((20, 20, 20), dtype=np.float32)
+        with pytest.raises(RuntimeError, match="brain mask is empty"):
+            ScipyBrainMask().compute(volume, np.eye(4))
+
     def test_implements_protocol(self):
         assert isinstance(ScipyBrainMask(), BrainMaskStrategy)
 
@@ -129,6 +139,27 @@ class TestSynthStripBrainMask:
                 np.zeros((5, 5, 5), dtype=np.float32), np.eye(4)
             )
 
+    def test_compute_raises_on_empty_mask_output(self, monkeypatch):
+        """compute() raises RuntimeError when mri_synthstrip writes an all-zero mask."""
+        import nibabel as nib
+
+        volume = _sphere_volume()
+        affine = np.eye(4)
+        empty_mask = np.zeros(volume.shape, dtype=np.uint8)
+
+        def fake_run(cmd, *, capture_output, text):
+            mask_path = cmd[cmd.index("-m") + 1]
+            nib.save(nib.Nifti1Image(empty_mask.astype(np.float32), affine), mask_path)
+            result = MagicMock()
+            result.returncode = 0
+            return result
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/mri_synthstrip")
+        monkeypatch.setattr("subprocess.run", fake_run)
+
+        with pytest.raises(RuntimeError, match="brain mask is empty"):
+            SynthStripBrainMask().compute(volume, affine)
+
     def test_implements_protocol(self):
         assert isinstance(SynthStripBrainMask(), BrainMaskStrategy)
 
@@ -142,7 +173,7 @@ class TestGetAvailableStrategies:
     def test_scipy_always_present(self):
         strategies = get_available_strategies()
         names = [s.name for s in strategies]
-        assert "scipy" in names
+        assert "Scipy (morphological)" in names
 
     def test_available_strategies_come_first(self, monkeypatch):
         """Available strategies should precede unavailable ones."""
@@ -159,6 +190,18 @@ class TestGetAvailableStrategies:
                 seen_unavailable = True
             if seen_unavailable:
                 assert not avail, "Available strategy found after an unavailable one"
+
+    def test_synthstrip_before_scipy_when_both_available(self, monkeypatch):
+        """SynthStrip should appear before Scipy when it is available."""
+        monkeypatch.setattr(
+            "SEEGFellowLib.brain_mask.SynthStripBrainMask.is_available",
+            lambda self: True,
+        )
+        strategies = get_available_strategies()
+        names = [s.name for s in strategies]
+        assert names.index("SynthStrip (FreeSurfer)") < names.index(
+            "Scipy (morphological)"
+        )
 
     def test_all_implement_protocol(self):
         for strategy in get_available_strategies():

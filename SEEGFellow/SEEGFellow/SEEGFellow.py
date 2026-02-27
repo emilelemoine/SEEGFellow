@@ -564,11 +564,14 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         # --- Compute mask in MRI voxel space ---
         t1_array = arrayFromVolume(self._t1_node)
 
-        # arrayFromVolume returns (K, J, I); spacing from node is (I, J, K)
-        spacing_ijk = self._t1_node.GetSpacing()  # (I, J, K)
-        voxel_size_kji = (spacing_ijk[2], spacing_ijk[1], spacing_ijk[0])
+        # Extract the 4x4 IJK-to-RAS affine for NIfTI export
+        ijkToRAS = vtk.vtkMatrix4x4()
+        self._t1_node.GetIJKToRASMatrix(ijkToRAS)
+        affine = np.array(
+            [[ijkToRAS.GetElement(r, c) for c in range(4)] for r in range(4)]
+        )
 
-        brain_mask_t1 = compute_brain_mask(t1_array, voxel_size_mm=voxel_size_kji)
+        brain_mask_t1 = compute_brain_mask(t1_array, affine)
 
         print(
             f"[SEEGFellow] Brain mask voxel count in MRI space: "
@@ -576,7 +579,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         )
 
         if not np.any(brain_mask_t1):
-            raise RuntimeError("Brain mask is empty – Otsu/erosion failed on this MRI.")
+            raise RuntimeError("Brain mask is empty – deepbet failed on this MRI.")
 
         # --- Create a temporary labelmap in MRI space ---
         # Clone geometry entirely via IJKToRAS (encodes origin+spacing+directions)

@@ -36,42 +36,30 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         # Step 1: Load Data
         self.ui.loadButton.clicked.connect(self._on_load_clicked)
 
-        # Step 2: Rough Alignment
+        # Step 2: Co-registration
         self.ui.createTransformButton.clicked.connect(self._on_create_transform_clicked)
-        self.ui.openTransformsButton.clicked.connect(self._on_open_transforms_clicked)
-        self.ui.roughAlignDoneButton.clicked.connect(self._on_rough_align_done_clicked)
-
-        # Step 3: Co-registration
         self.ui.registerButton.clicked.connect(self._on_register_clicked)
-        self.ui.acceptRegistrationButton.clicked.connect(
-            self._on_accept_registration_clicked
-        )
-        self.ui.rerunRegistrationButton.clicked.connect(self._on_register_clicked)
 
-        # Step 4a: Intracranial Mask
+        # Step 3a: Intracranial Mask
         self._setup_brain_mask_combo()
         self.ui.computeHeadMaskButton.clicked.connect(
             self._on_compute_head_mask_clicked
         )
         self.ui.editHeadMaskButton.clicked.connect(self._on_edit_head_mask_clicked)
-        self.ui.acceptHeadMaskButton.clicked.connect(self._on_accept_head_mask_clicked)
 
-        # Step 4b: Metal Threshold
+        # Step 3b: Metal Threshold
         self.ui.thresholdSlider.valueChanged.connect(self._on_threshold_changed)
         self.ui.applyMetalThresholdButton.clicked.connect(
             self._on_apply_metal_threshold_clicked
         )
         self.ui.editMetalMaskButton.clicked.connect(self._on_edit_metal_mask_clicked)
-        self.ui.acceptMetalMaskButton.clicked.connect(
-            self._on_accept_metal_mask_clicked
-        )
 
-        # Step 4c: Contact Detection
+        # Step 3c: Contact Detection
         self.ui.detectElectrodesButton.clicked.connect(
             self._on_detect_electrodes_clicked
         )
 
-        # Step 5: Rename Electrodes
+        # Step 4: Rename Electrodes
         self.ui.applyNamesButton.clicked.connect(self._on_apply_names_clicked)
 
         # Results & Export
@@ -169,45 +157,37 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             slicer.util.showStatusMessage("Loading volumes...")
             self.logic.load_volumes(t1_path, ct_path)
             slicer.util.showStatusMessage("Volumes loaded.")
-            self.ui.roughAlignCollapsibleButton.collapsed = False
+            self.ui.coregistrationCollapsibleButton.collapsed = False
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to load volumes: {e}")
 
     # -------------------------------------------------------------------------
-    # Step 2: Rough Alignment
+    # Step 2: Co-registration
     # -------------------------------------------------------------------------
 
     def _on_create_transform_clicked(self):
+        self._ensure_session_restored()
         try:
             self.logic.create_rough_transform()
+            self.ui.roughTransformComboBox.setCurrentNode(
+                self.logic._rough_transform_node
+            )
+            slicer.util.selectModule("Transforms")
             slicer.util.showStatusMessage(
                 "Transform created. Adjust in Transforms module."
             )
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to create transform: {e}")
 
-    def _on_open_transforms_clicked(self):
-        slicer.util.selectModule("Transforms")
-
-    def _on_rough_align_done_clicked(self):
-        self.ui.registrationCollapsibleButton.collapsed = False
-
-    # -------------------------------------------------------------------------
-    # Step 3: Co-registration
-    # -------------------------------------------------------------------------
-
     def _on_register_clicked(self):
+        self._ensure_session_restored()
         try:
-            self.ui.registrationProgressBar.setValue(0)
             slicer.util.showStatusMessage("Running BRAINSFit registration...")
             self.logic.run_registration()
-            self.ui.registrationProgressBar.setValue(100)
             slicer.util.showStatusMessage("Registration complete.")
+            self.ui.intracranialMaskCollapsibleButton.collapsed = False
         except Exception as e:
             slicer.util.errorDisplay(f"Registration failed: {e}")
-
-    def _on_accept_registration_clicked(self):
-        self.ui.intracranialMaskCollapsibleButton.collapsed = False
 
     # -------------------------------------------------------------------------
     # Step 4a: Intracranial Mask
@@ -231,6 +211,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             )
             self.logic.run_intracranial_mask(strategy=strategy)
             slicer.util.showStatusMessage("Brain parenchyma mask computed.")
+            self.ui.metalThresholdCollapsibleButton.collapsed = False
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to compute brain mask: {e}")
 
@@ -245,12 +226,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         # Use CT as background so the user can see electrodes while editing
         editor_widget.editor.setSourceVolumeNode(self.logic._ct_node)
 
-    def _on_accept_head_mask_clicked(self):
-        self.ui.metalThresholdCollapsibleButton.collapsed = False
-        slicer.util.showStatusMessage("Head mask accepted.")
-
     # -------------------------------------------------------------------------
-    # Step 4b: Metal Threshold
+    # Step 3b: Metal Threshold
     # -------------------------------------------------------------------------
 
     def _on_threshold_changed(self, value: float) -> None:
@@ -272,6 +249,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             slicer.util.showStatusMessage("Applying metal threshold...")
             self.logic.run_metal_threshold(threshold)
             slicer.util.showStatusMessage("Metal threshold applied.")
+            self.ui.contactDetectionCollapsibleButton.collapsed = False
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to apply threshold: {e}")
 
@@ -284,12 +262,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         editor_widget.editor.setSegmentationNode(self.logic._segmentation_node)
         editor_widget.editor.setSourceVolumeNode(self.logic._ct_node)
 
-    def _on_accept_metal_mask_clicked(self):
-        self.ui.contactDetectionCollapsibleButton.collapsed = False
-        slicer.util.showStatusMessage("Metal mask accepted.")
-
     # -------------------------------------------------------------------------
-    # Step 4c: Contact Detection
+    # Step 3c: Contact Detection
     # -------------------------------------------------------------------------
 
     def _on_detect_electrodes_clicked(self):

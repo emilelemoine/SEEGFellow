@@ -18,59 +18,57 @@
     </widget>
    </item>
 
-   <!-- Step 2: Rough Alignment -->
+   <!-- Step 2: Co-registration -->
    <item>
-    <widget class="ctkCollapsibleButton" name="roughAlignCollapsibleButton">
-     <property name="text"><string>Step 2: Rough Alignment</string></property>
+    <widget class="ctkCollapsibleButton" name="coregistrationCollapsibleButton">
+     <property name="text"><string>Step 2: Co-registration</string></property>
      <property name="collapsed"><bool>true</bool></property>
-     <layout class="QVBoxLayout" name="roughAlignLayout">
-      <item><widget class="QLabel" name="roughAlignInstructions"><property name="text"><string>Use the Transforms module to roughly align the CT to the T1. Translate and rotate until the CT skull roughly overlaps the T1.</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
-      <item><widget class="QPushButton" name="createTransformButton"><property name="text"><string>Create Transform</string></property></widget></item>
-      <item><widget class="QPushButton" name="openTransformsButton"><property name="text"><string>Open Transforms Module</string></property></widget></item>
-      <item><widget class="QPushButton" name="roughAlignDoneButton"><property name="text"><string>Done — Proceed to Registration</string></property></widget></item>
-     </layout>
-    </widget>
-   </item>
-
-   <!-- Step 3: Co-registration -->
-   <item>
-    <widget class="ctkCollapsibleButton" name="registrationCollapsibleButton">
-     <property name="text"><string>Step 3: Co-registration</string></property>
-     <property name="collapsed"><bool>true</bool></property>
-     <layout class="QVBoxLayout" name="registrationLayout">
-      <item><widget class="QPushButton" name="registerButton"><property name="text"><string>Register (BRAINSFit Rigid)</string></property></widget></item>
-      <item><widget class="QProgressBar" name="registrationProgressBar"><property name="value"><number>0</number></property></widget></item>
+     <layout class="QHBoxLayout" name="coregistrationLayout">
       <item>
-       <layout class="QHBoxLayout">
-        <item><widget class="QPushButton" name="acceptRegistrationButton"><property name="text"><string>Accept</string></property></widget></item>
-        <item><widget class="QPushButton" name="rerunRegistrationButton"><property name="text"><string>Re-run</string></property></widget></item>
+       <layout class="QVBoxLayout" name="coregistrationLeftLayout">
+        <item>
+         <layout class="QHBoxLayout">
+          <item><widget class="QLabel"><property name="text"><string>Transform:</string></property></widget></item>
+          <item>
+           <widget class="qMRMLNodeComboBox" name="roughTransformComboBox">
+            <property name="nodeTypes"><stringlist><string>vtkMRMLLinearTransformNode</string></stringlist></property>
+            <property name="noneEnabled"><bool>true</bool></property>
+            <property name="addEnabled"><bool>false</bool></property>
+            <property name="removeEnabled"><bool>false</bool></property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item><widget class="QPushButton" name="createTransformButton"><property name="text"><string>Create Transform</string></property></widget></item>
+        <item><spacer><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QVBoxLayout" name="coregistrationRightLayout">
+        <item><widget class="QPushButton" name="registerButton"><property name="text"><string>Register&#xa;(BRAINSFit Rigid)</string></property></widget></item>
+        <item><spacer><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
        </layout>
       </item>
      </layout>
     </widget>
    </item>
 
-   <!-- Step 4a: Intracranial Mask -->
+   <!-- Step 3a: Intracranial Mask -->
    <item>
     <widget class="ctkCollapsibleButton" name="intracranialMaskCollapsibleButton">
-     <property name="text"><string>Step 4a: Intracranial Mask</string></property>
+     <property name="text"><string>Step 3a: Intracranial Mask</string></property>
      <property name="collapsed"><bool>true</bool></property>
      <layout class="QVBoxLayout" name="intracranialMaskLayout">
       <item><widget class="QPushButton" name="computeHeadMaskButton"><property name="text"><string>Compute Intracranial Mask</string></property></widget></item>
-      <item>
-       <layout class="QHBoxLayout">
-        <item><widget class="QPushButton" name="editHeadMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
-        <item><widget class="QPushButton" name="acceptHeadMaskButton"><property name="text"><string>Accept</string></property></widget></item>
-       </layout>
-      </item>
+      <item><widget class="QPushButton" name="editHeadMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
      </layout>
     </widget>
    </item>
 
-   <!-- Step 4b: Metal Threshold -->
+   <!-- Step 3b: Metal Threshold -->
    <item>
     <widget class="ctkCollapsibleButton" name="metalThresholdCollapsibleButton">
-     <property name="text"><string>Step 4b: Metal Threshold</string></property>
+     <property name="text"><string>Step 3b: Metal Threshold</string></property>
      <property name="collapsed"><bool>true</bool></property>
      <layout class="QVBoxLayout" name="metalThresholdLayout">
       <item>
@@ -81,20 +79,15 @@
        </layout>
       </item>
       <item><widget class="QPushButton" name="applyMetalThresholdButton"><property name="text"><string>Apply Threshold</string></property></widget></item>
-      <item>
-       <layout class="QHBoxLayout">
-        <item><widget class="QPushButton" name="editMetalMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
-        <item><widget class="QPushButton" name="acceptMetalMaskButton"><property name="text"><string>Accept</string></property></widget></item>
-       </layout>
-      </item>
+      <item><widget class="QPushButton" name="editMetalMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
      </layout>
     </widget>
    </item>
 
-   <!-- Step 4c: Contact Detection (LoG) -->
+   <!-- Step 3c: Contact Detection (LoG) -->
    <item>
     <widget class="ctkCollapsibleButton" name="contactDetectionCollapsibleButton">
-     <property name="text"><string>Step 4c: Detect Contacts (LoG)</string></property>
+     <property name="text"><string>Step 3c: Detect Contacts (LoG)</string></property>
      <property name="collapsed"><bool>true</bool></property>
      <layout class="QVBoxLayout" name="contactDetectionLayout">
       <item>
@@ -123,7 +116,7 @@
    <!-- Step 5: Rename Electrodes -->
    <item>
     <widget class="ctkCollapsibleButton" name="renameElectrodesCollapsibleButton">
-     <property name="text"><string>Step 5: Rename Electrodes</string></property>
+     <property name="text"><string>Step 4: Rename Electrodes</string></property>
      <property name="collapsed"><bool>true</bool></property>
      <layout class="QVBoxLayout" name="renameElectrodesLayout">
       <item>

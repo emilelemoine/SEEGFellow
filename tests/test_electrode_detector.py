@@ -157,6 +157,21 @@ class TestDetectElectrodes:
         electrodes = detect_electrodes(e1, min_contacts=3)
         assert len(electrodes) == 0
 
+    def test_spacing_cutoff_factor_controls_acceptance(self):
+        """A cluster at 1.5 mm spacing is rejected with default expected_spacing (cutoff = 2.275 mm)
+        but accepted when expected_spacing matches actual spacing (cutoff = 0.975 mm)."""
+        # 1.5 mm contacts — below the default cutoff (3.5 * 0.65 = 2.275 mm)
+        centers = self._make_centers([0, 0, 0], [1, 0, 0], 8, spacing=1.5)
+        assert detect_electrodes(centers, spacing_cutoff_factor=0.65) == []
+        assert (
+            len(
+                detect_electrodes(
+                    centers, expected_spacing=1.5, spacing_cutoff_factor=0.65
+                )
+            )
+            == 1
+        )
+
 
 class TestDetectElectrodesWithNoise:
     def _make_centers(self, start, direction, n_contacts, spacing=3.5):

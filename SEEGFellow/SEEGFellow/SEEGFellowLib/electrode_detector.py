@@ -271,6 +271,7 @@ def detect_electrodes(
     expected_spacing: float = 3.5,
     collinearity_tolerance: float = 10.0,
     gap_ratio_threshold: float = 1.8,
+    spacing_cutoff_factor: float = 0.65,
 ) -> list[Electrode]:
     """Full detection pipeline from pre-detected contact centers.
 
@@ -283,6 +284,9 @@ def detect_electrodes(
         expected_spacing: Expected contact spacing in mm.
         collinearity_tolerance: Max angle for merging collinear fragments.
         gap_ratio_threshold: Threshold for gap detection.
+        spacing_cutoff_factor: Fraction of expected_spacing below which a cluster's
+            contact spacing is considered implausibly small and rejected.
+            Default 0.65 preserves the previous hard-coded behavior.
 
     Returns:
         List of Electrode objects with auto-numbered contacts (unnamed).
@@ -318,7 +322,11 @@ def detect_electrodes(
         spacing_info = analyze_spacing(sorted_projections, gap_ratio_threshold)
 
         # Reject clusters whose spacing is implausibly small (scattered noise)
-        if 0 < spacing_info["contact_spacing"] < expected_spacing * 0.65:
+        if (
+            0
+            < spacing_info["contact_spacing"]
+            < expected_spacing * spacing_cutoff_factor
+        ):
             continue
 
         # 6. Orient deepest first

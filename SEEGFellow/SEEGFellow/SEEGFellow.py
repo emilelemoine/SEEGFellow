@@ -450,6 +450,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._rough_transform_node = None
         self._registration_transform_node = None
         self.electrodes: list = []  # list[Electrode]
+        self._raw_contacts_node_id: str | None = None
         self._seed_node = None
         self._direction_node = None
         self._segmentation_node = None
@@ -773,40 +774,73 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         max_component_voxels: int = 500,
         spacing_cutoff_factor: float = 0.65,
     ) -> None:
-        """Run full automated electrode detection pipeline.
+        """Run LoG contact detection and place one fiducial per detected contact.
 
-        Step 4b (metal threshold) must be completed before calling this method.
+        Electrode grouping is intentionally skipped so the raw LoG output can
+        be evaluated independently. Step 4b (metal threshold) must be completed
+        before calling this method.
 
         Example::
 
             logic.run_electrode_detection(sigma=1.2)
         """
+        import numpy as np
+        from SEEGFellowLib.electrode_detector import (
+            ElectrodeDetector,
+            _filter_contact_mask,
+        )
+        from SEEGFellowLib.metal_segmenter import detect_contact_centers
+        from slicer.util import arrayFromVolume
+
         if self._metal_mask is None:
             raise RuntimeError(
                 "Metal mask not computed. Run step 4b (metal threshold) first."
             )
 
-        # Remove fiducials from any previous run before creating new ones.
-        for electrode in self.electrodes:
-            node = slicer.mrmlScene.GetNodeByID(electrode.markups_node_id)
+        # Remove fiducials from any previous run.
+        if self._raw_contacts_node_id is not None:
+            node = slicer.mrmlScene.GetNodeByID(self._raw_contacts_node_id)
             if node is not None:
                 slicer.mrmlScene.RemoveNode(node)
+            self._raw_contacts_node_id = None
         self.electrodes = []
 
-        from SEEGFellowLib.electrode_detector import ElectrodeDetector
+        ct_array = arrayFromVolume(self._ct_node)
 
-        detector = ElectrodeDetector(
-            expected_spacing=expected_spacing,
-            min_contacts=min_contacts,
-            spacing_cutoff_factor=spacing_cutoff_factor,
+        contact_mask = _filter_contact_mask(
+            self._metal_mask, min_voxels=3, max_voxels=max_component_voxels
         )
-        self.electrodes = detector.detect_all(
-            self._ct_node,
-            metal_mask=self._metal_mask,
-            sigma=sigma,
-            max_component_voxels=max_component_voxels,
+        print(
+            f"[SEEGFellow] metal_mask nonzero={int(np.sum(self._metal_mask))}"
+            f"  contact_mask nonzero={int(np.sum(contact_mask))}"
         )
-        self._create_fiducials_for_electrodes()
+
+        centers_ijk = detect_contact_centers(ct_array, contact_mask, sigma=sigma)
+        print(f"[SEEGFellow] LoG detected {len(centers_ijk)} contact candidates")
+        if len(centers_ijk) == 0:
+            return
+
+        # Convert IJK → RAS.
+        ijk_to_ras = ElectrodeDetector._get_ijk_to_ras_matrix(self._ct_node)
+        centers_ijk_reordered = centers_ijk[:, ::-1]  # [k,j,i] → [i,j,k]
+        ones = np.ones((len(centers_ijk_reordered), 1))
+        ijk_h = np.hstack([centers_ijk_reordered.astype(float), ones])
+        ras_h = (ijk_to_ras @ ijk_h.T).T
+        centers_ras = ras_h[:, :3]
+
+        # One fiducial node for all raw contacts.
+        node = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLMarkupsFiducialNode", "LoG Contacts"
+        )
+        for i, (r, a, s) in enumerate(centers_ras):
+            node.AddControlPoint(r, a, s, str(i + 1))
+
+        display = node.GetMarkupsDisplayNode()
+        if display is not None:
+            display.SetGlyphScale(1.5)
+            display.SetTextScale(1.5)
+
+        self._raw_contacts_node_id = node.GetID()
 
     def _create_fiducials_for_electrodes(self) -> None:
         """Create a markups fiducial node for each electrode's contacts."""

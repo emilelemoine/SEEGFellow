@@ -253,6 +253,149 @@ def orient_deepest_first(
         return contact_positions - contact_positions[0], axis_direction
 
 
+def ransac_group_contacts(
+    contact_coords: np.ndarray,
+    expected_spacing: float = 3.5,
+    distance_tolerance: float = 2.0,
+    max_iterations: int = 1000,
+    min_contacts: int = 3,
+    spacing_low_factor: float = 0.5,
+    spacing_high_factor: float = 2.0,
+    random_seed: int | None = None,
+) -> list[np.ndarray]:
+    """Group contact centers into electrodes using iterative RANSAC line fitting.
+
+    Repeatedly fits lines through the point cloud. Each iteration samples two
+    points, finds all contacts within ``distance_tolerance`` perpendicular
+    distance of that line, validates spacing, and claims the best-supported
+    line's inliers. Claimed contacts are removed and the process repeats.
+
+    Args:
+        contact_coords: (N, 3) array of contact center RAS coordinates.
+        expected_spacing: Expected contact spacing in mm.
+        distance_tolerance: Max perpendicular distance (mm) to count as inlier.
+        max_iterations: RANSAC trials per electrode.
+        min_contacts: Minimum inliers to accept an electrode.
+        spacing_low_factor: Lower bound on median spacing as fraction of
+            expected_spacing (e.g. 0.5 means >= 1.75 mm for 3.5 mm spacing).
+        spacing_high_factor: Upper bound on median spacing as fraction of
+            expected_spacing (e.g. 2.0 means <= 7.0 mm for 3.5 mm spacing).
+        random_seed: Optional seed for reproducibility.
+
+    Returns:
+        List of (M, 3) arrays, one per electrode. Coordinates are the original
+        input values (not reprojected).
+
+    Example::
+
+        groups = ransac_group_contacts(centers_ras, expected_spacing=3.5)
+    """
+    if len(contact_coords) < min_contacts:
+        return []
+
+    rng = np.random.default_rng(random_seed)
+    pool_indices = np.arange(len(contact_coords))
+    coords = contact_coords.copy()
+    groups: list[np.ndarray] = []
+
+    spacing_lo = expected_spacing * spacing_low_factor
+    spacing_hi = expected_spacing * spacing_high_factor
+
+    while len(pool_indices) >= min_contacts:
+        best_inlier_idx = None
+        best_count = 0
+
+        pool_coords = coords[pool_indices]
+
+        for _ in range(max_iterations):
+            # Sample 2 distinct points
+            sample = rng.choice(len(pool_coords), size=2, replace=False)
+            p1, p2 = pool_coords[sample[0]], pool_coords[sample[1]]
+            direction = p2 - p1
+            length = np.linalg.norm(direction)
+            if length < 1e-8:
+                continue
+            direction /= length
+
+            # Perpendicular distance of all pool points to line through p1
+            diff = pool_coords - p1
+            proj = np.dot(diff, direction)
+            perp = diff - proj[:, np.newaxis] * direction
+            dists = np.linalg.norm(perp, axis=1)
+
+            inlier_mask = dists < distance_tolerance
+            if np.sum(inlier_mask) < min_contacts:
+                continue
+
+            # Deduplicate: if two inliers project to nearly the same position
+            # on the line, keep only the one closest to the line.
+            inlier_local = np.where(inlier_mask)[0]
+            inlier_proj_vals = proj[inlier_local]
+            inlier_dists = dists[inlier_local]
+            sort_order = np.argsort(inlier_proj_vals)
+            inlier_local = inlier_local[sort_order]
+            inlier_proj_vals = inlier_proj_vals[sort_order]
+            inlier_dists = inlier_dists[sort_order]
+            keep = np.ones(len(inlier_local), dtype=bool)
+            for k in range(1, len(inlier_local)):
+                if (
+                    abs(inlier_proj_vals[k] - inlier_proj_vals[k - 1])
+                    < distance_tolerance
+                ):
+                    # Near-duplicate projection: keep the one closer to the line
+                    if inlier_dists[k] < inlier_dists[k - 1]:
+                        keep[k - 1] = False
+                    else:
+                        keep[k] = False
+            inlier_local = inlier_local[keep]
+            n_inliers = len(inlier_local)
+            if n_inliers < min_contacts:
+                continue
+
+            # Validate spacing: median neighbor distance along the line
+            inlier_proj = inlier_proj_vals[keep]
+            spacings = np.diff(inlier_proj)
+            if len(spacings) == 0:
+                continue
+            median_sp = np.median(spacings)
+            if not (spacing_lo <= median_sp <= spacing_hi):
+                continue
+
+            if n_inliers > best_count:
+                best_count = n_inliers
+                best_inlier_idx = inlier_local
+
+        if best_inlier_idx is None:
+            break
+
+        # Refit axis on RANSAC inliers, then re-check only those same inliers.
+        # We do NOT expand the inlier set during refit — that would risk pulling
+        # in contacts from a crossing electrode that happens to be close.
+        inlier_global = pool_indices[best_inlier_idx]
+        inlier_coords = coords[inlier_global]
+        center, direction = fit_electrode_axis(inlier_coords)
+        diff = inlier_coords - center
+        proj = np.dot(diff, direction)
+        perp = diff - proj[:, np.newaxis] * direction
+        dists = np.linalg.norm(perp, axis=1)
+        refined_local_mask = dists < distance_tolerance
+
+        # Re-validate spacing after refit; if valid, drop any inliers that
+        # no longer fit the refined axis (can only shrink the set).
+        refined_proj = np.sort(proj[refined_local_mask])
+        refined_spacings = np.diff(refined_proj)
+        if len(refined_spacings) > 0:
+            refined_median = np.median(refined_spacings)
+            if spacing_lo <= refined_median <= spacing_hi:
+                best_inlier_idx = best_inlier_idx[refined_local_mask]
+
+        claimed_global = pool_indices[best_inlier_idx]
+        groups.append(coords[claimed_global])
+        pool_indices = np.setdiff1d(pool_indices, claimed_global)
+
+    return groups
+
+
 def detect_electrodes(
     contact_centers: np.ndarray,
     min_contacts: int = 3,

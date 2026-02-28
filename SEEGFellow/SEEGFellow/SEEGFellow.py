@@ -293,6 +293,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         max_component_voxels = self.ui.maxComponentVoxelsSpinBox.value
         # Slider stores percentage (30–90); convert to factor (0.30–0.90)
         spacing_cutoff_factor = self.ui.spacingCutoffSlider.value / 100.0
+        distance_tolerance = self.ui.distanceToleranceSpinBox.value
+        max_iterations = self.ui.maxIterationsSpinBox.value
         try:
             slicer.util.showStatusMessage("Detecting electrodes...")
             self.logic.run_electrode_detection(
@@ -301,6 +303,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
                 min_contacts=min_contacts,
                 max_component_voxels=max_component_voxels,
                 spacing_cutoff_factor=spacing_cutoff_factor,
+                distance_tolerance=distance_tolerance,
+                max_iterations=max_iterations,
             )
             self._populate_electrode_table()
             slicer.util.showStatusMessage(

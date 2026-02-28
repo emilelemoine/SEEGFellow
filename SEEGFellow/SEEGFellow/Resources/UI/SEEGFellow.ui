@@ -126,9 +126,27 @@
      <property name="text"><string>Step 5: Rename Electrodes</string></property>
      <property name="collapsed"><bool>true</bool></property>
      <layout class="QVBoxLayout" name="renameElectrodesLayout">
-      <item><widget class="QTableWidget" name="electrodeTable"><property name="minimumSize"><size><width>0</width><height>625</height></size></property></widget></item>
+      <item>
+       <layout class="QHBoxLayout" name="renameElectrodesHBoxLayout">
+        <item>
+         <widget class="QGroupBox" name="leftHemisphereGroupBox">
+          <property name="title"><string>Left Hemisphere</string></property>
+          <layout class="QVBoxLayout" name="leftHemisphereLayout">
+           <item><widget class="QTableWidget" name="leftElectrodeTable"><property name="minimumSize"><size><width>0</width><height>425</height></size></property></widget></item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="rightHemisphereGroupBox">
+          <property name="title"><string>Right Hemisphere</string></property>
+          <layout class="QVBoxLayout" name="rightHemisphereLayout">
+           <item><widget class="QTableWidget" name="rightElectrodeTable"><property name="minimumSize"><size><width>0</width><height>425</height></size></property></widget></item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </item>
       <item><widget class="QPushButton" name="applyNamesButton"><property name="text"><string>Apply Names</string></property></widget></item>
-      <item><widget class="QPushButton" name="exportToClipboardButton"><property name="text"><string>Export to Clipboard</string></property></widget></item>
      </layout>
     </widget>
    </item>

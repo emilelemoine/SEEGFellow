@@ -11,6 +11,7 @@ from SEEGFellowLib.electrode_detector import (
     cluster_into_electrodes,
 )
 from SEEGFellowLib.electrode_detector import _filter_contact_mask
+from SEEGFellowLib.electrode_detector import orient_deepest_first
 
 
 class TestClusterIntoElectrodes:
@@ -326,3 +327,56 @@ class TestFilterContactMask:
         assert _filter_contact_mask(mask, min_voxels=3, max_voxels=5).sum() == 0
         # With max_voxels=15 it should be included
         assert _filter_contact_mask(mask, min_voxels=3, max_voxels=15).sum() == 10
+
+
+class TestOrientDeepestFirst:
+    def test_deepest_is_closest_to_brain_centroid(self):
+        """Contact nearest to brain centroid should be index 0."""
+        # Electrode along X from 10 to 40
+        positions = np.array([10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0])
+        axis_origin = np.array([25.0, 0.0, 0.0])
+        axis_direction = np.array([1.0, 0.0, 0.0])
+        # Brain centroid at (5, 0, 0) — deepest end is at x=10
+        brain_centroid = np.array([5.0, 0.0, 0.0])
+
+        sorted_idx, oriented_dir = orient_deepest_first(
+            positions, axis_origin, axis_direction, brain_centroid=brain_centroid
+        )
+        # First index should correspond to x=10 (closest to centroid)
+        first_ras = axis_origin + positions[sorted_idx[0]] * axis_direction
+        last_ras = axis_origin + positions[sorted_idx[-1]] * axis_direction
+        assert np.linalg.norm(first_ras - brain_centroid) < np.linalg.norm(
+            last_ras - brain_centroid
+        )
+
+    def test_already_correct_orientation(self):
+        """If first contact is already deepest, no reversal needed."""
+        positions = np.array([0.0, 3.5, 7.0])
+        axis_origin = np.array([50.0, 0.0, 0.0])
+        axis_direction = np.array([-1.0, 0.0, 0.0])
+        # Brain centroid at (0, 0, 0) — x=50 maps to RAS (50,0,0),
+        # positions[0]=0 → RAS = 50 + 0*(-1) = (50,0,0)
+        # positions[2]=7.0 → RAS = 50 + 7*(-1) = (43,0,0) — closer to centroid
+        brain_centroid = np.array([0.0, 0.0, 0.0])
+
+        sorted_idx, oriented_dir = orient_deepest_first(
+            positions, axis_origin, axis_direction, brain_centroid=brain_centroid
+        )
+        # Should reverse: positions[2] is deepest
+        first_ras = axis_origin + positions[sorted_idx[0]] * axis_direction
+        assert np.linalg.norm(first_ras - brain_centroid) < np.linalg.norm(
+            (axis_origin + positions[sorted_idx[-1]] * axis_direction) - brain_centroid
+        )
+
+    def test_fallback_to_origin_when_no_centroid(self):
+        """When brain_centroid is None, fall back to (0,0,0)."""
+        positions = np.array([0.0, 3.5, 7.0])
+        axis_origin = np.array([10.0, 0.0, 0.0])
+        axis_direction = np.array([1.0, 0.0, 0.0])
+
+        sorted_idx, _ = orient_deepest_first(
+            positions, axis_origin, axis_direction, brain_centroid=None
+        )
+        # With origin (0,0,0): first contact at RAS (10,0,0), last at (17,0,0)
+        # (10,0,0) is closer to origin → already correct, no reversal
+        assert sorted_idx[0] == 0

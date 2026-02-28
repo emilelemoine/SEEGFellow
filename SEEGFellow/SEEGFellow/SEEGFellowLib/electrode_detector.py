@@ -229,28 +229,34 @@ def orient_deepest_first(
     contact_positions: np.ndarray,
     axis_origin: np.ndarray,
     axis_direction: np.ndarray,
+    brain_centroid: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Orient contacts so index 1 = deepest (closest to brain center at origin 0,0,0).
+    """Orient contacts so index 0 = deepest (closest to brain center).
 
     Args:
-        contact_positions: Sorted 1D array of positions along axis.
-        axis_origin: 3D center of the electrode cluster.
+        contact_positions: Sorted 1D array of projection positions along axis.
+        axis_origin: 3D center of the electrode cluster (PCA mean).
         axis_direction: Unit vector along electrode axis.
+        brain_centroid: 3D RAS coordinates of brain center. If None, falls back
+            to (0, 0, 0).
 
     Returns:
-        (sorted_positions, oriented_direction): positions sorted deepest-first,
-        and direction pointing from deepest to most lateral.
+        (sorted_indices, oriented_direction): integer indices into
+        contact_positions sorted deepest-first, and direction vector pointing
+        from deepest to most lateral.
     """
-    # Compute RAS coordinates of first and last contact
+    if brain_centroid is None:
+        brain_centroid = np.zeros(3)
+
     first_ras = axis_origin + contact_positions[0] * axis_direction
     last_ras = axis_origin + contact_positions[-1] * axis_direction
 
-    # Deepest = closest to brain center (0,0,0)
-    if np.linalg.norm(first_ras) > np.linalg.norm(last_ras):
-        # Reverse: last is deeper
-        return contact_positions[::-1] - contact_positions[-1], -axis_direction
-    else:
-        return contact_positions - contact_positions[0], axis_direction
+    indices = np.arange(len(contact_positions))
+    if np.linalg.norm(first_ras - brain_centroid) > np.linalg.norm(
+        last_ras - brain_centroid
+    ):
+        return indices[::-1], -axis_direction
+    return indices, axis_direction
 
 
 def ransac_group_contacts(
@@ -461,7 +467,7 @@ def detect_electrodes(
             continue
 
         # 6. Orient deepest first
-        sorted_positions, oriented_dir = orient_deepest_first(
+        orient_indices, oriented_dir = orient_deepest_first(
             sorted_projections, center, direction
         )
 
@@ -475,8 +481,8 @@ def detect_electrodes(
         )
 
         contacts = []
-        for i, pos in enumerate(sorted_positions):
-            ras = center + pos * oriented_dir
+        for i, idx in enumerate(orient_indices):
+            ras = center + sorted_projections[idx] * oriented_dir
             contacts.append(Contact(index=i + 1, position_ras=tuple(ras)))
 
         electrode = Electrode(

@@ -773,24 +773,19 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         min_contacts: int = 3,
         max_component_voxels: int = 500,
         spacing_cutoff_factor: float = 0.65,
+        distance_tolerance: float = 2.0,
+        max_iterations: int = 1000,
     ) -> None:
-        """Run LoG contact detection and place one fiducial per detected contact.
+        """Run LoG contact detection, group into electrodes, and place fiducials.
 
-        Electrode grouping is intentionally skipped so the raw LoG output can
-        be evaluated independently. Step 4b (metal threshold) must be completed
-        before calling this method.
+        Step 4b (metal threshold) must be completed before calling this method.
 
         Example::
 
             logic.run_electrode_detection(sigma=1.2)
         """
         import numpy as np
-        from SEEGFellowLib.electrode_detector import (
-            ElectrodeDetector,
-            _filter_contact_mask,
-        )
-        from SEEGFellowLib.metal_segmenter import detect_contact_centers
-        from slicer.util import arrayFromVolume
+        from SEEGFellowLib.electrode_detector import ElectrodeDetector
 
         if self._metal_mask is None:
             raise RuntimeError(
@@ -805,42 +800,35 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
             self._raw_contacts_node_id = None
         self.electrodes = []
 
-        ct_array = arrayFromVolume(self._ct_node)
+        # Compute brain centroid from head mask (used for deepest-first orientation).
+        brain_centroid = None
+        if self._head_mask is not None:
+            brain_voxels = np.argwhere(self._head_mask > 0)
+            if len(brain_voxels) > 0:
+                # brain_voxels rows are (K, J, I); reverse to get IJK
+                centroid_ijk = brain_voxels.mean(axis=0)[::-1]  # KJI → IJK
+                ijk_to_ras = ElectrodeDetector._get_ijk_to_ras_matrix(self._ct_node)
+                centroid_h = np.append(centroid_ijk, 1.0)
+                brain_centroid = (ijk_to_ras @ centroid_h)[:3]
 
-        contact_mask = _filter_contact_mask(
-            self._metal_mask, min_voxels=3, max_voxels=max_component_voxels
+        detector = ElectrodeDetector(
+            min_contacts=min_contacts,
+            expected_spacing=expected_spacing,
+            distance_tolerance=distance_tolerance,
+            max_iterations=max_iterations,
+            spacing_cutoff_factor=spacing_cutoff_factor,
         )
-        print(
-            f"[SEEGFellow] metal_mask nonzero={int(np.sum(self._metal_mask))}"
-            f"  contact_mask nonzero={int(np.sum(contact_mask))}"
+
+        self.electrodes = detector.detect_all(
+            self._ct_node,
+            self._metal_mask,
+            sigma=sigma,
+            max_component_voxels=max_component_voxels,
+            brain_centroid=brain_centroid,
         )
+        print(f"[SEEGFellow] Detected {len(self.electrodes)} electrodes")
 
-        centers_ijk = detect_contact_centers(ct_array, contact_mask, sigma=sigma)
-        print(f"[SEEGFellow] LoG detected {len(centers_ijk)} contact candidates")
-        if len(centers_ijk) == 0:
-            return
-
-        # Convert IJK → RAS.
-        ijk_to_ras = ElectrodeDetector._get_ijk_to_ras_matrix(self._ct_node)
-        centers_ijk_reordered = centers_ijk[:, ::-1]  # [k,j,i] → [i,j,k]
-        ones = np.ones((len(centers_ijk_reordered), 1))
-        ijk_h = np.hstack([centers_ijk_reordered.astype(float), ones])
-        ras_h = (ijk_to_ras @ ijk_h.T).T
-        centers_ras = ras_h[:, :3]
-
-        # One fiducial node for all raw contacts.
-        node = slicer.mrmlScene.AddNewNodeByClass(
-            "vtkMRMLMarkupsFiducialNode", "LoG Contacts"
-        )
-        for i, (r, a, s) in enumerate(centers_ras):
-            node.AddControlPoint(r, a, s, str(i + 1))
-
-        display = node.GetMarkupsDisplayNode()
-        if display is not None:
-            display.SetGlyphScale(1.5)
-            display.SetTextScale(1.5)
-
-        self._raw_contacts_node_id = node.GetID()
+        self._create_fiducials_for_electrodes()
 
     def _create_fiducials_for_electrodes(self) -> None:
         """Create a markups fiducial node for each electrode's contacts."""

@@ -415,11 +415,15 @@ class ElectrodeDetector:
         self,
         min_contacts: int = 3,
         expected_spacing: float = 3.5,
+        distance_tolerance: float = 2.0,
+        max_iterations: int = 1000,
         gap_ratio_threshold: float = 1.8,
         spacing_cutoff_factor: float = 0.65,
     ):
         self.min_contacts = min_contacts
         self.expected_spacing = expected_spacing
+        self.distance_tolerance = distance_tolerance
+        self.max_iterations = max_iterations
         self.gap_ratio_threshold = gap_ratio_threshold
         self.spacing_cutoff_factor = spacing_cutoff_factor
 
@@ -429,6 +433,7 @@ class ElectrodeDetector:
         metal_mask: np.ndarray,
         sigma: float = 1.2,
         max_component_voxels: int = 500,
+        brain_centroid: np.ndarray | None = None,
     ) -> list[Electrode]:
         """From a CT volume and pre-computed metal mask, detect all electrodes.
 
@@ -440,6 +445,8 @@ class ElectrodeDetector:
             sigma: LoG scale in voxels for contact detection.
             max_component_voxels: Maximum connected-component size (voxels) to keep
                 as a contact candidate. Larger components are likely bolts or screws.
+            brain_centroid: 3D RAS coordinates of brain center for contact orientation.
+                Falls back to (0, 0, 0) if None.
 
         Returns:
             List of Electrode objects.
@@ -489,8 +496,11 @@ class ElectrodeDetector:
             centers_ras,
             min_contacts=self.min_contacts,
             expected_spacing=self.expected_spacing,
+            distance_tolerance=self.distance_tolerance,
+            max_iterations=self.max_iterations,
             gap_ratio_threshold=self.gap_ratio_threshold,
             spacing_cutoff_factor=self.spacing_cutoff_factor,
+            brain_centroid=brain_centroid,
         )
         return electrodes
 

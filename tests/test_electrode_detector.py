@@ -7,50 +7,8 @@ sys.path.insert(
 )
 
 import numpy as np
-from SEEGFellowLib.electrode_detector import (
-    cluster_into_electrodes,
-)
 from SEEGFellowLib.electrode_detector import _filter_contact_mask
 from SEEGFellowLib.electrode_detector import orient_deepest_first
-
-
-class TestClusterIntoElectrodes:
-    def _make_centers(self, start, direction, n_contacts, spacing=3.5):
-        """Create synthetic contact centers: one point per contact."""
-        direction = np.array(direction, dtype=float)
-        direction /= np.linalg.norm(direction)
-        return np.array(
-            [np.array(start) + i * spacing * direction for i in range(n_contacts)]
-        )
-
-    def test_two_separate_electrodes(self):
-        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
-        e2 = self._make_centers([0, 50, 0], [0, 1, 0], 6)
-        all_centers = np.vstack([e1, e2])
-        clusters = cluster_into_electrodes(all_centers, distance_threshold=7.0)
-        assert len(clusters) == 2
-
-    def test_single_electrode(self):
-        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 10)
-        clusters = cluster_into_electrodes(e1, distance_threshold=7.0)
-        assert len(clusters) == 1
-
-    def test_electrodes_separated_by_more_than_threshold_not_merged(self):
-        """Electrodes whose closest contacts are 8.5 mm apart must stay separate
-        at distance_threshold=7.0 mm.
-
-        The old grid-based approach (cell_size=7 mm, 26-connectivity) put e1[0]
-        at cell (0,0,0) and e2[0] at cell (0,1,0) — adjacent — and incorrectly
-        merged all 16 contacts into one cluster.  Exact single-linkage must keep
-        them apart because 8.5 mm > 7.0 mm.
-        """
-        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8, spacing=3.5)
-        # Closest pair: e1[0]=(0,0,0) to e2[0]=(0,8.5,0) → 8.5 mm > threshold
-        e2 = self._make_centers([0, 8.5, 0], [0, 1, 0], 8, spacing=3.5)
-        all_centers = np.vstack([e1, e2])
-        clusters = cluster_into_electrodes(all_centers, distance_threshold=7.0)
-        assert len(clusters) == 2
-
 
 from SEEGFellowLib.electrode_detector import (
     fit_electrode_axis,
@@ -84,54 +42,10 @@ class TestFitElectrodeAxis:
 
 
 from SEEGFellowLib.electrode_detector import (
-    merge_collinear_clusters,
     analyze_spacing,
     detect_electrodes,
 )
 from SEEGFellowLib.electrode_model import Electrode
-
-
-class TestMergeCollinearClusters:
-    def test_merges_two_collinear_fragments(self):
-        """Two fragments along the same line should merge."""
-        np.random.seed(42)
-        frag1 = np.column_stack(
-            [
-                np.linspace(0, 10, 20),
-                np.random.randn(20) * 0.3,
-                np.random.randn(20) * 0.3,
-            ]
-        )
-        frag2 = np.column_stack(
-            [
-                np.linspace(20, 30, 20),  # same axis, gap in between
-                np.random.randn(20) * 0.3,
-                np.random.randn(20) * 0.3,
-            ]
-        )
-        clusters = [frag1, frag2]
-        merged = merge_collinear_clusters(clusters, angle_tolerance=15.0)
-        assert len(merged) == 1
-
-    def test_does_not_merge_perpendicular(self):
-        np.random.seed(42)
-        frag1 = np.column_stack(
-            [
-                np.linspace(0, 20, 30),
-                np.zeros(30),
-                np.zeros(30),
-            ]
-        )
-        frag2 = np.column_stack(
-            [
-                np.zeros(30),
-                np.linspace(40, 60, 30),  # perpendicular, far away
-                np.zeros(30),
-            ]
-        )
-        clusters = [frag1, frag2]
-        merged = merge_collinear_clusters(clusters, angle_tolerance=15.0)
-        assert len(merged) == 2
 
 
 class TestAnalyzeSpacing:

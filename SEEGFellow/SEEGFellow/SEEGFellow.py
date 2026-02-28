@@ -81,10 +81,15 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui.deleteElectrodeButton.clicked.connect(self._on_delete_electrode_clicked)
 
         # Set up electrode table columns
-        self.ui.electrodeTable.setColumnCount(2)
-        self.ui.electrodeTable.setHorizontalHeaderLabels(["Contacts", "Name"])
+        self.ui.electrodeTable.setColumnCount(4)
+        self.ui.electrodeTable.setHorizontalHeaderLabels(
+            ["Label", "Contacts", "Entry", "Target"]
+        )
         self.ui.electrodeTable.horizontalHeader().setStretchLastSection(True)
         self.ui.electrodeTable.cellClicked.connect(self._on_electrode_table_row_clicked)
+        self.ui.exportToClipboardButton.clicked.connect(
+            self._on_export_to_clipboard_clicked
+        )
 
         # Set up contact table columns
         self.ui.contactTable.setColumnCount(5)
@@ -314,14 +319,25 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     def _populate_electrode_table(self):
         from qt import QLineEdit, QTableWidgetItem
 
+        def _fmt_ras(pos: tuple[float, float, float]) -> str:
+            r, a, s = pos
+            return f"{r:.1f}, {a:.1f}, {s:.1f}"
+
         electrodes = self.logic.electrodes
         self.ui.electrodeTable.setRowCount(len(electrodes))
         for row, electrode in enumerate(electrodes):
-            self.ui.electrodeTable.setItem(
-                row, 0, QTableWidgetItem(str(electrode.num_contacts))
-            )
             name_edit = QLineEdit(electrode.name)
-            self.ui.electrodeTable.setCellWidget(row, 1, name_edit)
+            self.ui.electrodeTable.setCellWidget(row, 0, name_edit)
+            self.ui.electrodeTable.setItem(
+                row, 1, QTableWidgetItem(str(electrode.num_contacts))
+            )
+            if electrode.contacts:
+                entry_text = _fmt_ras(electrode.contacts[-1].position_ras)
+                target_text = _fmt_ras(electrode.contacts[0].position_ras)
+            else:
+                entry_text = target_text = ""
+            self.ui.electrodeTable.setItem(row, 2, QTableWidgetItem(entry_text))
+            self.ui.electrodeTable.setItem(row, 3, QTableWidgetItem(target_text))
 
         self._refresh_electrode_list()
 
@@ -356,7 +372,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         from qt import QLineEdit
 
         for row in range(self.ui.electrodeTable.rowCount):
-            name_widget = self.ui.electrodeTable.cellWidget(row, 1)
+            name_widget = self.ui.electrodeTable.cellWidget(row, 0)
             if isinstance(name_widget, QLineEdit):
                 name = name_widget.text.strip()
                 if name and row < len(self.logic.electrodes):
@@ -368,6 +384,46 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self._populate_contact_table()
         self.ui.exportCollapsibleButton.collapsed = False
         slicer.util.showStatusMessage("Names applied.")
+
+    def _on_export_to_clipboard_clicked(self):
+        from qt import QApplication, QLineEdit, QMimeData
+
+        table = self.ui.electrodeTable
+        headers = ["Label", "Contacts", "Entry", "Target"]
+
+        data_rows: list[list[str]] = []
+        for row in range(table.rowCount):
+            label_widget = table.cellWidget(row, 0)
+            label = label_widget.text if isinstance(label_widget, QLineEdit) else ""
+            contacts = table.item(row, 1).text() if table.item(row, 1) else ""
+            entry = table.item(row, 2).text() if table.item(row, 2) else ""
+            target = table.item(row, 3).text() if table.item(row, 3) else ""
+            data_rows.append([label, contacts, entry, target])
+
+        # Plain-text TSV (fallback)
+        tsv_lines = ["\t".join(headers)]
+        for row in data_rows:
+            tsv_lines.append("\t".join(row))
+        tsv = "\n".join(tsv_lines)
+
+        # HTML table (Word pastes this directly as a native table)
+        def _td(cell: str, tag: str = "td") -> str:
+            return f"<{tag}>{cell}</{tag}>"
+
+        html_rows = ["<tr>" + "".join(_td(h, "th") for h in headers) + "</tr>"]
+        for row in data_rows:
+            html_rows.append("<tr>" + "".join(_td(c) for c in row) + "</tr>")
+        html = (
+            "<html><body><table border='1'>"
+            + "".join(html_rows)
+            + "</table></body></html>"
+        )
+
+        mime = QMimeData()
+        mime.setText(tsv)
+        mime.setHtml(html)
+        QApplication.clipboard().setMimeData(mime)
+        slicer.util.showStatusMessage("Electrode table copied to clipboard.")
 
     def _restore_electrode_colors(self) -> None:
         """Reset all electrode fiducial colors to their assigned palette colors."""

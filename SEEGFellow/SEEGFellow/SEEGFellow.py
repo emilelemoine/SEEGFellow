@@ -279,11 +279,20 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     # -------------------------------------------------------------------------
 
     def _on_detect_electrodes_clicked(self):
-        threshold = self.ui.thresholdSlider.value
         sigma = self.ui.sigmaSlider.value
+        expected_spacing = self.ui.expectedSpacingSpinBox.value
+        min_contacts = self.ui.minContactsSpinBox.value
+        max_component_voxels = self.ui.maxComponentVoxelsSpinBox.value
+        spacing_cutoff_factor = self.ui.spacingCutoffSlider.value / 100.0
         try:
             slicer.util.showStatusMessage("Detecting electrodes...")
-            self.logic.run_electrode_detection(threshold, sigma=sigma)
+            self.logic.run_electrode_detection(
+                sigma=sigma,
+                expected_spacing=expected_spacing,
+                min_contacts=min_contacts,
+                max_component_voxels=max_component_voxels,
+                spacing_cutoff_factor=spacing_cutoff_factor,
+            )
             self._populate_electrode_table()
             slicer.util.showStatusMessage(
                 f"Detected {len(self.logic.electrodes)} electrode(s)."
@@ -747,19 +756,45 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._metal_mask = metal_mask
 
     def run_electrode_detection(
-        self, threshold: float = 2500, sigma: float = 1.2
+        self,
+        sigma: float = 1.2,
+        expected_spacing: float = 3.5,
+        min_contacts: int = 3,
+        max_component_voxels: int = 500,
+        spacing_cutoff_factor: float = 0.65,
     ) -> None:
         """Run full automated electrode detection pipeline.
 
+        Step 4b (metal threshold) must be completed before calling this method.
+
         Example::
 
-            logic.run_electrode_detection(threshold=2500, sigma=1.2)
+            logic.run_electrode_detection(sigma=1.2)
         """
+        if self._metal_mask is None:
+            raise RuntimeError(
+                "Metal mask not computed. Run step 4b (metal threshold) first."
+            )
+
+        # Remove fiducials from any previous run before creating new ones.
+        for electrode in self.electrodes:
+            node = slicer.mrmlScene.GetNodeByID(electrode.markups_node_id)
+            if node is not None:
+                slicer.mrmlScene.RemoveNode(node)
+        self.electrodes = []
+
         from SEEGFellowLib.electrode_detector import ElectrodeDetector
 
-        detector = ElectrodeDetector()
+        detector = ElectrodeDetector(
+            expected_spacing=expected_spacing,
+            min_contacts=min_contacts,
+            spacing_cutoff_factor=spacing_cutoff_factor,
+        )
         self.electrodes = detector.detect_all(
-            self._ct_node, threshold=threshold, sigma=sigma
+            self._ct_node,
+            metal_mask=self._metal_mask,
+            sigma=sigma,
+            max_component_voxels=max_component_voxels,
         )
         self._create_fiducials_for_electrodes()
 

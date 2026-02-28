@@ -70,28 +70,21 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui.detectElectrodesButton.clicked.connect(
             self._on_detect_electrodes_clicked
         )
+
+        # Step 5: Rename Electrodes
         self.ui.applyNamesButton.clicked.connect(self._on_apply_names_clicked)
 
-        # Manual Fallback
-        self.ui.placeSeedButton.clicked.connect(self._on_place_seed_clicked)
-        self.ui.placeDirectionButton.clicked.connect(self._on_place_direction_clicked)
-        self.ui.detectSingleButton.clicked.connect(self._on_detect_single_clicked)
-
         # Results & Export
-        self.ui.createSegmentationButton.clicked.connect(
-            self._on_create_segmentation_clicked
-        )
         self.ui.exportCsvButton.clicked.connect(self._on_export_csv_clicked)
 
         # Electrode List
         self.ui.deleteElectrodeButton.clicked.connect(self._on_delete_electrode_clicked)
 
         # Set up electrode table columns
-        self.ui.electrodeTable.setColumnCount(3)
-        self.ui.electrodeTable.setHorizontalHeaderLabels(
-            ["Contacts", "Spacing (mm)", "Name"]
-        )
+        self.ui.electrodeTable.setColumnCount(2)
+        self.ui.electrodeTable.setHorizontalHeaderLabels(["Contacts", "Name"])
         self.ui.electrodeTable.horizontalHeader().setStretchLastSection(True)
+        self.ui.electrodeTable.cellClicked.connect(self._on_electrode_table_row_clicked)
 
         # Set up contact table columns
         self.ui.contactTable.setColumnCount(5)
@@ -307,9 +300,13 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
                 max_iterations=max_iterations,
             )
             self._populate_electrode_table()
+            # Hide the segmentation overlay so contacts are visible
+            if self.logic._segmentation_node is not None:
+                self.logic._segmentation_node.GetDisplayNode().SetVisibility(False)
             slicer.util.showStatusMessage(
                 f"Detected {len(self.logic.electrodes)} electrode(s)."
             )
+            self.ui.renameElectrodesCollapsibleButton.collapsed = False
             self.ui.electrodeListCollapsibleButton.collapsed = False
         except Exception as e:
             slicer.util.errorDisplay(f"Electrode detection failed: {e}")
@@ -323,29 +320,66 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             self.ui.electrodeTable.setItem(
                 row, 0, QTableWidgetItem(str(electrode.num_contacts))
             )
-            self.ui.electrodeTable.setItem(
-                row, 1, QTableWidgetItem(f"{electrode.params.contact_spacing:.1f}")
-            )
             name_edit = QLineEdit(electrode.name)
-            self.ui.electrodeTable.setCellWidget(row, 2, name_edit)
+            self.ui.electrodeTable.setCellWidget(row, 1, name_edit)
 
         self._refresh_electrode_list()
+
+    def _on_electrode_table_row_clicked(self, row: int, _column: int) -> None:
+        """Highlight the selected electrode in red and jump slice views to it."""
+        if row < 0 or row >= len(self.logic.electrodes):
+            return
+
+        colors = SEEGFellowLogic.ELECTRODE_COLORS
+        for idx, electrode in enumerate(self.logic.electrodes):
+            node = slicer.mrmlScene.GetNodeByID(electrode.markups_node_id)
+            if node is None:
+                continue
+            display = node.GetDisplayNode()
+            if idx == row:
+                display.SetSelectedColor(1.0, 0.0, 0.0)
+                display.SetColor(1.0, 0.0, 0.0)
+                display.SetOpacity(1.0)
+            else:
+                color = colors[idx % len(colors)]
+                display.SetSelectedColor(*color)
+                display.SetColor(*color)
+                display.SetOpacity(0.7)
+
+        # Jump slice views to the first contact of the selected electrode
+        electrode = self.logic.electrodes[row]
+        if electrode.contacts:
+            r, a, s = electrode.contacts[0].position_ras
+            slicer.modules.markups.logic().JumpSlicesToLocation(r, a, s, True)
 
     def _on_apply_names_clicked(self):
         from qt import QLineEdit
 
-        for row in range(self.ui.electrodeTable.rowCount()):
-            name_widget = self.ui.electrodeTable.cellWidget(row, 2)
+        for row in range(self.ui.electrodeTable.rowCount):
+            name_widget = self.ui.electrodeTable.cellWidget(row, 1)
             if isinstance(name_widget, QLineEdit):
                 name = name_widget.text.strip()
                 if name and row < len(self.logic.electrodes):
                     self.logic.electrodes[row].assign_labels(name)
 
         self.logic.update_fiducials()
+        self._restore_electrode_colors()
         self._refresh_electrode_list()
         self._populate_contact_table()
         self.ui.exportCollapsibleButton.collapsed = False
         slicer.util.showStatusMessage("Names applied.")
+
+    def _restore_electrode_colors(self) -> None:
+        """Reset all electrode fiducial colors to their assigned palette colors."""
+        colors = SEEGFellowLogic.ELECTRODE_COLORS
+        for idx, electrode in enumerate(self.logic.electrodes):
+            node = slicer.mrmlScene.GetNodeByID(electrode.markups_node_id)
+            if node is None:
+                continue
+            display = node.GetDisplayNode()
+            color = colors[idx % len(colors)]
+            display.SetSelectedColor(*color)
+            display.SetColor(*color)
 
     def _populate_contact_table(self):
         from qt import QTableWidgetItem
@@ -367,46 +401,14 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui.electrodeListWidget.clear()
         for electrode in self.logic.electrodes:
             label = electrode.name if electrode.name else "(unnamed)"
+            spacing = electrode.params.contact_spacing
             self.ui.electrodeListWidget.addItem(
-                f"{label}  ({electrode.num_contacts} contacts)"
+                f"{label}  ({electrode.num_contacts} contacts, {spacing:.1f} mm)"
             )
-
-    # -------------------------------------------------------------------------
-    # Step 6: Manual Fallback
-    # -------------------------------------------------------------------------
-
-    def _on_place_seed_clicked(self):
-        self.logic.start_seed_placement()
-        slicer.util.showStatusMessage("Click on the deepest contact in the slice view.")
-
-    def _on_place_direction_clicked(self):
-        self.logic.start_direction_placement()
-        slicer.util.showStatusMessage("Click a second point to define the direction.")
-
-    def _on_detect_single_clicked(self):
-        self._ensure_session_restored()
-        num_contacts = self.ui.numContactsSpinBox.value
-        spacing = self.ui.spacingSpinBox.value
-        try:
-            slicer.util.showStatusMessage("Detecting contacts from seed point...")
-            self.logic.run_single_detection(num_contacts, spacing)
-            self._populate_electrode_table()
-            self._refresh_electrode_list()
-            slicer.util.showStatusMessage("Single electrode detection complete.")
-        except Exception as e:
-            slicer.util.errorDisplay(f"Single electrode detection failed: {e}")
 
     # -------------------------------------------------------------------------
     # Results & Export
     # -------------------------------------------------------------------------
-
-    def _on_create_segmentation_clicked(self):
-        try:
-            slicer.util.showStatusMessage("Creating contact segmentation...")
-            self.logic.create_segmentation()
-            slicer.util.showStatusMessage("Segmentation created.")
-        except Exception as e:
-            slicer.util.errorDisplay(f"Failed to create segmentation: {e}")
 
     def _on_export_csv_clicked(self):
         path = slicer.util.saveFileDialog(
@@ -455,22 +457,12 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._registration_transform_node = None
         self.electrodes: list = []  # list[Electrode]
         self._raw_contacts_node_id: str | None = None
-        self._seed_node = None
-        self._direction_node = None
         self._segmentation_node = None
         self._head_mask = None
         self._metal_mask = None
 
     def cleanup(self):
-        """Remove temporary markup nodes."""
-        for node in [self._seed_node, self._direction_node]:
-            if node is not None:
-                try:
-                    slicer.mrmlScene.RemoveNode(node)
-                except Exception:
-                    pass
-        self._seed_node = None
-        self._direction_node = None
+        pass
 
     # -------------------------------------------------------------------------
     # Session restore
@@ -834,17 +826,54 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         self._create_fiducials_for_electrodes()
 
+    # 20 visually distinct colors for electrode fiducials (tab20-inspired)
+    ELECTRODE_COLORS = [
+        (0.122, 0.467, 0.706),  # blue
+        (1.000, 0.498, 0.055),  # orange
+        (0.173, 0.627, 0.173),  # green
+        (0.839, 0.153, 0.157),  # red
+        (0.580, 0.404, 0.741),  # purple
+        (0.549, 0.337, 0.294),  # brown
+        (0.890, 0.467, 0.761),  # pink
+        (0.498, 0.498, 0.498),  # gray
+        (0.737, 0.741, 0.133),  # olive
+        (0.090, 0.745, 0.812),  # cyan
+        (0.682, 0.780, 0.910),  # light blue
+        (1.000, 0.733, 0.471),  # light orange
+        (0.596, 0.875, 0.541),  # light green
+        (1.000, 0.596, 0.588),  # light red
+        (0.773, 0.690, 0.835),  # light purple
+        (0.769, 0.612, 0.580),  # light brown
+        (0.969, 0.714, 0.824),  # light pink
+        (0.780, 0.780, 0.780),  # light gray
+        (0.859, 0.859, 0.553),  # light olive
+        (0.620, 0.855, 0.898),  # light cyan
+    ]
+
     def _create_fiducials_for_electrodes(self) -> None:
         """Create a markups fiducial node for each electrode's contacts."""
-        for electrode in self.electrodes:
+        for idx, electrode in enumerate(self.electrodes):
+            # Default label uses dash prefix: "-1", "-2", ...
+            if not electrode.name:
+                electrode.assign_labels("-")
             node = slicer.mrmlScene.AddNewNodeByClass(
                 "vtkMRMLMarkupsFiducialNode",
-                electrode.name if electrode.name else "Electrode",
+                electrode.name if electrode.name else "-",
             )
             for contact in electrode.contacts:
                 r, a, s = contact.position_ras
                 node.AddControlPoint(r, a, s, contact.label)
             electrode.markups_node_id = node.GetID()
+
+            # Display properties
+            display = node.GetDisplayNode()
+            color = self.ELECTRODE_COLORS[idx % len(self.ELECTRODE_COLORS)]
+            display.SetSelectedColor(*color)
+            display.SetColor(*color)
+            display.SetOpacity(0.7)
+            display.SetGlyphScale(2.0)
+            display.SetTextScale(2.25)
+            display.SetUseGlyphScale(True)
 
     def update_fiducials(self) -> None:
         """Update fiducial node names and labels after names are assigned."""
@@ -867,112 +896,8 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                         node.SetNthControlPointLabel(i, contact.label)
 
     # -------------------------------------------------------------------------
-    # Step 6: Manual fallback (seed-point)
-    # -------------------------------------------------------------------------
-
-    def start_seed_placement(self) -> None:
-        """Enter markup placement mode to let the user click the seed contact."""
-        if self._seed_node is None:
-            self._seed_node = slicer.mrmlScene.AddNewNodeByClass(
-                "vtkMRMLMarkupsFiducialNode", "SeedPoint"
-            )
-            self._seed_node.SetMaximumNumberOfControlPoints(1)
-
-        interactionNode = slicer.app.applicationLogic().GetInteractionNode()
-        selectionNode = slicer.app.applicationLogic().GetSelectionNode()
-        selectionNode.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
-        selectionNode.SetActivePlaceNodeID(self._seed_node.GetID())
-        interactionNode.SetCurrentInteractionMode(interactionNode.Place)
-
-    def start_direction_placement(self) -> None:
-        """Enter markup placement mode to let the user click a direction hint."""
-        if self._direction_node is None:
-            self._direction_node = slicer.mrmlScene.AddNewNodeByClass(
-                "vtkMRMLMarkupsFiducialNode", "DirectionHint"
-            )
-            self._direction_node.SetMaximumNumberOfControlPoints(1)
-
-        interactionNode = slicer.app.applicationLogic().GetInteractionNode()
-        selectionNode = slicer.app.applicationLogic().GetSelectionNode()
-        selectionNode.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
-        selectionNode.SetActivePlaceNodeID(self._direction_node.GetID())
-        interactionNode.SetCurrentInteractionMode(interactionNode.Place)
-
-    def run_single_detection(self, num_contacts: int, spacing: float) -> None:
-        """Detect contacts along a single electrode from a seed point.
-
-        Example::
-
-            logic.run_single_detection(num_contacts=8, spacing=3.5)
-        """
-        import numpy as np
-        from SEEGFellowLib.electrode_model import Electrode, ElectrodeParams
-        from SEEGFellowLib.trajectory_detector import IntensityProfileDetector
-
-        if self._seed_node is None or self._seed_node.GetNumberOfControlPoints() == 0:
-            raise RuntimeError("No seed point placed. Click 'Place Seed Point' first.")
-
-        seed_pos = [0.0, 0.0, 0.0]
-        self._seed_node.GetNthControlPointPosition(0, seed_pos)
-        seed_ras: tuple[float, float, float] = (seed_pos[0], seed_pos[1], seed_pos[2])
-
-        direction_hint: tuple[float, float, float] | None = None
-        if (
-            self._direction_node is not None
-            and self._direction_node.GetNumberOfControlPoints() > 0
-        ):
-            hint_pos = [0.0, 0.0, 0.0]
-            self._direction_node.GetNthControlPointPosition(0, hint_pos)
-            diff = np.array(hint_pos) - np.array(seed_pos)
-            direction_hint = (float(diff[0]), float(diff[1]), float(diff[2]))
-
-        params = ElectrodeParams(
-            contact_length=2.0,
-            contact_spacing=spacing,
-            contact_diameter=0.8,
-        )
-
-        detector = IntensityProfileDetector()
-        contacts = detector.detect(
-            seed_ras=seed_ras,
-            ct_volume_node=self._ct_node,
-            num_contacts=num_contacts,
-            params=params,
-            direction_hint=direction_hint,
-        )
-
-        electrode = Electrode(
-            name="",
-            params=params,
-            contacts=contacts,
-            trajectory_direction=(0.0, 0.0, 0.0),
-        )
-        self.electrodes.append(electrode)
-
-        # Create fiducials for the new electrode
-        node = slicer.mrmlScene.AddNewNodeByClass(
-            "vtkMRMLMarkupsFiducialNode", "ManualElectrode"
-        )
-        for contact in contacts:
-            r, a, s = contact.position_ras
-            node.AddControlPoint(r, a, s, contact.label)
-        electrode.markups_node_id = node.GetID()
-
-    # -------------------------------------------------------------------------
     # Results & Export
     # -------------------------------------------------------------------------
-
-    def create_segmentation(self) -> None:
-        """Create a per-contact cylindrical segmentation for 3D visualization.
-
-        Example::
-
-            logic.create_segmentation()
-        """
-        from SEEGFellowLib.contact_segmenter import ContactSegmenter
-
-        segmenter = ContactSegmenter()
-        segmenter.create_segmentation(self.electrodes, self._ct_node)
 
     def export_csv(self, path: str) -> None:
         """Export all contact positions to a CSV file.

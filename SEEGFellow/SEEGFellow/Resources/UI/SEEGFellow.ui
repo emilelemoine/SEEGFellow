@@ -116,37 +116,29 @@
        </layout>
       </item>
       <item><widget class="QPushButton" name="detectElectrodesButton"><property name="text"><string>Detect All Electrodes</string></property></widget></item>
-      <item><widget class="QTableWidget" name="electrodeTable"/></item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- Step 5: Rename Electrodes -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="renameElectrodesCollapsibleButton">
+     <property name="text"><string>Step 5: Rename Electrodes</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="renameElectrodesLayout">
+      <item><widget class="QTableWidget" name="electrodeTable"><property name="minimumSize"><size><width>0</width><height>625</height></size></property></widget></item>
       <item><widget class="QPushButton" name="applyNamesButton"><property name="text"><string>Apply Names</string></property></widget></item>
      </layout>
     </widget>
    </item>
 
-   <!-- Step 6: Manual Fallback -->
-   <item>
-    <widget class="ctkCollapsibleButton" name="manualFallbackCollapsibleButton">
-     <property name="text"><string>Manual Fallback (Seed-Point Mode)</string></property>
-     <property name="collapsed"><bool>true</bool></property>
-     <layout class="QFormLayout" name="manualFallbackLayout">
-      <item row="0" column="0"><widget class="QLabel"><property name="text"><string>Num. contacts:</string></property></widget></item>
-      <item row="0" column="1"><widget class="QSpinBox" name="numContactsSpinBox"><property name="minimum"><number>1</number></property><property name="maximum"><number>20</number></property><property name="value"><number>8</number></property></widget></item>
-      <item row="1" column="0"><widget class="QLabel"><property name="text"><string>Spacing (mm):</string></property></widget></item>
-      <item row="1" column="1"><widget class="QDoubleSpinBox" name="spacingSpinBox"><property name="minimum"><double>1.0</double></property><property name="maximum"><double>10.0</double></property><property name="value"><double>3.5</double></property><property name="singleStep"><double>0.1</double></property></widget></item>
-      <item row="2" column="1"><widget class="QPushButton" name="placeSeedButton"><property name="text"><string>Place Seed Point</string></property></widget></item>
-      <item row="3" column="1"><widget class="QPushButton" name="placeDirectionButton"><property name="text"><string>Set Direction Hint (optional)</string></property></widget></item>
-      <item row="4" column="1"><widget class="QPushButton" name="detectSingleButton"><property name="text"><string>Detect Contacts</string></property></widget></item>
-     </layout>
-    </widget>
-   </item>
-
-   <!-- Step 7: Review &amp; Export -->
+   <!-- Step 6: Review &amp; Export -->
    <item>
     <widget class="ctkCollapsibleButton" name="exportCollapsibleButton">
      <property name="text"><string>Results &amp; Export</string></property>
      <property name="collapsed"><bool>true</bool></property>
      <layout class="QVBoxLayout" name="exportLayout">
       <item><widget class="QTableWidget" name="contactTable"/></item>
-      <item><widget class="QPushButton" name="createSegmentationButton"><property name="text"><string>Create Segmentation</string></property></widget></item>
       <item><widget class="QPushButton" name="exportCsvButton"><property name="text"><string>Export CSV</string></property></widget></item>
      </layout>
     </widget>

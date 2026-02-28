@@ -283,6 +283,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         expected_spacing = self.ui.expectedSpacingSpinBox.value
         min_contacts = self.ui.minContactsSpinBox.value
         max_component_voxels = self.ui.maxComponentVoxelsSpinBox.value
+        # Slider stores percentage (30–90); convert to factor (0.30–0.90)
         spacing_cutoff_factor = self.ui.spacingCutoffSlider.value / 100.0
         try:
             slicer.util.showStatusMessage("Detecting electrodes...")
@@ -430,7 +431,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         logic = SEEGFellowLogic()
         logic.load_volumes("/path/T1.nii.gz", "/path/CT.nii.gz")
-        logic.run_electrode_detection(threshold=2500)
+        logic.run_electrode_detection(sigma=1.2, expected_spacing=3.5)
     """
 
     def __init__(self):

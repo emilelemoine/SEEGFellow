@@ -97,3 +97,25 @@ class TestDetectContactCenters:
         metal_mask = np.zeros((20, 20, 20), dtype=np.uint8)
         detected = detect_contact_centers(ct, metal_mask, sigma=1.2)
         assert len(detected) == 0
+
+    def test_nms_size_suppresses_weaker_nearby_minimum(self):
+        """A weaker LoG minimum near a stronger one is suppressed by a wider nms window.
+
+        Two point sources 6 voxels apart (safely past the LoG zero-crossing at
+        ~2.1 voxels for sigma=1.2) each own their minimum when the window is
+        small (nms_size=5, radius 2 < separation 6).  With nms_size=13 (radius 6
+        >= separation) the weaker minimum falls inside the stronger one's window
+        and is suppressed, leaving only 1 detection.
+        """
+        ct = np.zeros((30, 30, 30), dtype=np.float32)
+        metal_mask = np.zeros((30, 30, 30), dtype=np.uint8)
+        ct[15, 15, 15] = 3000.0  # strong blob
+        ct[15, 15, 21] = 1500.0  # weaker blob, 6 voxels away
+        metal_mask[15, 15, 15] = 1
+        metal_mask[15, 15, 21] = 1
+        # Small window: each blob is outside the other's neighbourhood → both detected
+        assert len(detect_contact_centers(ct, metal_mask, sigma=1.2, nms_size=5)) == 2
+        # Large window: weaker blob is suppressed by stronger neighbour → 1 detected
+        result = detect_contact_centers(ct, metal_mask, sigma=1.2, nms_size=13)
+        assert len(result) == 1
+        assert np.array_equal(result[0], [15, 15, 15])

@@ -76,7 +76,7 @@
       <item>
        <layout class="QFormLayout">
         <item row="0" column="0"><widget class="QLabel"><property name="text"><string>HU Threshold:</string></property></widget></item>
-        <item row="0" column="1"><widget class="ctkSliderWidget" name="thresholdSlider"><property name="minimum"><double>500</double></property><property name="maximum"><double>4000</double></property><property name="value"><double>2500</double></property><property name="singleStep"><double>50</double></property></widget></item>
+        <item row="0" column="1"><widget class="ctkSliderWidget" name="thresholdSlider"><property name="minimum"><double>500</double></property><property name="maximum"><double>4000</double></property><property name="value"><double>2000</double></property><property name="singleStep"><double>50</double></property></widget></item>
         <item row="1" column="1"><widget class="QLabel" name="voxelCountLabel"><property name="text"><string>—</string></property></widget></item>
        </layout>
       </item>

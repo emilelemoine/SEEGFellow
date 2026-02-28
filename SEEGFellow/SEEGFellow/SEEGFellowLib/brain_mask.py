@@ -122,6 +122,89 @@ class SynthStripBrainMask:
 
     name = "SynthStrip (FreeSurfer)"
 
+    def _resolve_command(self, executable: str) -> list[str]:
+        """Return the argv prefix needed to run *executable* safely.
+
+        Scripts with a ``#!/usr/bin/env python`` shebang fail on macOS when
+        ``python`` is not installed (only ``python3`` is).  If the shebang
+        requests any Python variant we find a concrete system Python and
+        prepend it so the OS shebang resolver is bypassed entirely.
+
+        Returns ``[executable]`` unchanged if the shebang is not Python.
+        """
+        try:
+            with open(executable, "rb") as fh:
+                first = fh.readline().decode("utf-8", errors="replace").strip()
+        except OSError:
+            return [executable]
+
+        if not first.startswith("#!") or "python" not in first:
+            return [executable]
+
+        # Build a system-only search path (same set as _build_subprocess_env).
+        freesurfer_home = os.environ.get("FREESURFER_HOME", "")
+        parts: list[str] = []
+        if freesurfer_home:
+            parts.append(os.path.join(freesurfer_home, "bin"))
+        parts += [
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "/usr/bin",
+            "/bin",
+            "/opt/local/bin",
+        ]
+        search = ":".join(parts)
+
+        for name in ("python3", "python"):
+            found = shutil.which(name, path=search)
+            if found:
+                return [found, executable]
+
+        return [executable]
+
+    def _build_subprocess_env(self) -> dict[str, str]:
+        """Return an env dict where system paths precede Slicer-internal Python paths.
+
+        Slicer prepends its bundled Python to PATH.  When mri_synthstrip's shebang
+        (``#!/usr/bin/env python``) resolves against that Python it gets
+        "Permission denied" (exit 126) because the framework binary can't be
+        invoked directly.  We fix this by moving well-known system directories to
+        the front so that the OS-level python/python3 is found first.
+        """
+        env = os.environ.copy()
+
+        # Prepend FREESURFER_HOME/bin and common system paths.
+        freesurfer_home = env.get("FREESURFER_HOME", "")
+        priority: list[str] = []
+        if freesurfer_home:
+            priority.append(os.path.join(freesurfer_home, "bin"))
+        priority += [
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "/usr/bin",
+            "/bin",
+            "/opt/local/bin",
+        ]
+
+        # Keep existing PATH entries that are NOT Slicer-internal Python dirs,
+        # de-duplicating against what we already put in priority.
+        existing = env.get("PATH", "").split(":")
+        seen = set(priority)
+        tail = [
+            p
+            for p in existing
+            if p not in seen and ("Slicer" not in p and "slicer" not in p)
+        ]
+
+        env["PATH"] = ":".join(priority + tail)
+
+        # Remove Slicer-injected Python env vars so the subprocess uses its
+        # own stdlib instead of Slicer's bundled one (which causes SRE mismatch).
+        for var in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONNOUSERSITE"):
+            env.pop(var, None)
+
+        return env
+
     def _find_executable(self) -> str | None:
         """Return the path to mri_synthstrip, or None if not found."""
         exe = shutil.which("mri_synthstrip")
@@ -132,7 +215,13 @@ class SynthStripBrainMask:
             candidate = os.path.join(freesurfer_home, "bin", "mri_synthstrip")
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                 return candidate
-        return None
+        # GUI apps (e.g. Slicer) may have a stripped PATH that excludes
+        # user-managed directories, so also search common locations.
+        fallback = shutil.which(
+            "mri_synthstrip",
+            path="/usr/local/bin:/opt/homebrew/bin:/opt/local/bin",
+        )
+        return fallback
 
     def is_available(self) -> bool:
         """Return True if mri_synthstrip is found on PATH or in FREESURFER_HOME."""
@@ -171,12 +260,15 @@ class SynthStripBrainMask:
             mask_path = os.path.join(tmpdir, "mask.nii.gz")
             brain_path = os.path.join(tmpdir, "brain.nii.gz")
 
-            nib.save(nib.Nifti1Image(volume, affine), input_path)
+            # Slicer arrays are (K,J,I); NIfTI expects (I,J,K) → transpose.
+            nib.save(nib.Nifti1Image(volume.T, affine), input_path)
 
             result = subprocess.run(
-                [executable, "-i", input_path, "-o", brain_path, "-m", mask_path],
+                self._resolve_command(executable)
+                + ["-i", input_path, "-o", brain_path, "-m", mask_path],
                 capture_output=True,
                 text=True,
+                env=self._build_subprocess_env(),
             )
             if result.returncode != 0:
                 raise RuntimeError(
@@ -184,7 +276,8 @@ class SynthStripBrainMask:
                 )
 
             mask_img = nib.load(mask_path)
-            mask = np.asarray(mask_img.dataobj)
+            # Transpose back from NIfTI (I,J,K) to Slicer's (K,J,I).
+            mask = np.asarray(mask_img.dataobj).T
 
         result = (mask > 0).astype(np.uint8)
         if result.sum() == 0:

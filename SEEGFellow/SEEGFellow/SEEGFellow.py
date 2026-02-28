@@ -206,10 +206,16 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     # Step 4a: Intracranial Mask
     # -------------------------------------------------------------------------
 
+    def _ensure_session_restored(self) -> None:
+        """Lazily restore scene nodes if the scene was loaded after module init."""
+        if self.logic._t1_node is None:
+            self.logic.try_restore_from_scene()
+
     def _on_compute_head_mask_clicked(self):
         if not self._brain_mask_strategies:
             slicer.util.errorDisplay("No brain mask method available.")
             return
+        self._ensure_session_restored()
         idx = self._brainMaskMethodComboBox.currentIndex
         strategy = self._brain_mask_strategies[idx]
         try:
@@ -253,6 +259,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui.voxelCountLabel.setText(f"{count:,} voxels above threshold")
 
     def _on_apply_metal_threshold_clicked(self):
+        self._ensure_session_restored()
         threshold = self.ui.thresholdSlider.value
         try:
             slicer.util.showStatusMessage("Applying metal threshold...")
@@ -279,6 +286,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     # -------------------------------------------------------------------------
 
     def _on_detect_electrodes_clicked(self):
+        self._ensure_session_restored()
         sigma = self.ui.sigmaSlider.value
         expected_spacing = self.ui.expectedSpacingSpinBox.value
         min_contacts = self.ui.minContactsSpinBox.value
@@ -372,6 +380,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         slicer.util.showStatusMessage("Click a second point to define the direction.")
 
     def _on_detect_single_clicked(self):
+        self._ensure_session_restored()
         num_contacts = self.ui.numContactsSpinBox.value
         spacing = self.ui.spacingSpinBox.value
         try:
@@ -712,12 +721,12 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         slicer.mrmlScene.RemoveNode(brain_label_node)
         slicer.mrmlScene.RemoveNode(brain_label_ct)
 
-    def run_metal_threshold(self, threshold: float = 2500) -> None:
+    def run_metal_threshold(self, threshold: float = 2000) -> None:
         """Threshold CT within intracranial mask and display as a segment.
 
         Example::
 
-            logic.run_metal_threshold(threshold=2500)
+            logic.run_metal_threshold(threshold=2000)
         """
         import vtk
         from SEEGFellowLib.metal_segmenter import threshold_volume

@@ -11,12 +11,12 @@ import numpy as np
 from scipy import ndimage
 
 
-def threshold_volume(volume: np.ndarray, threshold: float = 2500) -> np.ndarray:
+def threshold_volume(volume: np.ndarray, threshold: float = 2000) -> np.ndarray:
     """Threshold a CT volume to isolate high-intensity voxels.
 
     Example::
 
-        mask = threshold_volume(ct_array, threshold=2500)
+        mask = threshold_volume(ct_array, threshold=2000)
     """
     return (volume >= threshold).astype(np.uint8)
 
@@ -52,6 +52,7 @@ def detect_contact_centers(
     ct_array: np.ndarray,
     metal_mask: np.ndarray,
     sigma: float = 1.2,
+    nms_size: int | tuple[int, int, int] | None = None,
 ) -> np.ndarray:
     """Detect contact centers using Laplacian of Gaussian blob detection.
 
@@ -62,6 +63,11 @@ def detect_contact_centers(
         ct_array: CT volume in HU (3D numpy array).
         metal_mask: Binary mask (1 = candidate metal voxel).
         sigma: LoG scale in voxels (typical 1.0–1.5 mm, adjust for voxel size).
+        nms_size: Non-maximum suppression window size in voxels. Pass an int
+            for isotropic or a (K, J, I) tuple for anisotropic volumes. Defaults
+            to ``2 * ceil(sigma) + 1``. Use larger values (e.g. sized to half
+            the contact spacing) to suppress spurious duplicate detections on
+            sub-millimetre CT voxels.
 
     Returns:
         (N, 3) array of contact center positions in IJK coordinates.
@@ -76,9 +82,10 @@ def detect_contact_centers(
     # LoG response (negative at blob centers for bright blobs)
     log_response = ndimage.gaussian_laplace(ct_array.astype(np.float64), sigma=sigma)
 
-    # Local minima: voxel is smaller than all 26 neighbours
-    neighbourhood_size = 2 * int(np.ceil(sigma)) + 1
-    local_min = ndimage.minimum_filter(log_response, size=neighbourhood_size)
+    # Local minima: voxel is smaller than all neighbours within nms_size
+    if nms_size is None:
+        nms_size = 2 * int(np.ceil(sigma)) + 1
+    local_min = ndimage.minimum_filter(log_response, size=nms_size)
     is_local_min = (log_response == local_min) & (log_response < 0)
 
     # Keep only minima that fall within the metal mask

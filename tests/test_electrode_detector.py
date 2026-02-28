@@ -34,6 +34,22 @@ class TestClusterIntoElectrodes:
         clusters = cluster_into_electrodes(e1, distance_threshold=7.0)
         assert len(clusters) == 1
 
+    def test_electrodes_separated_by_more_than_threshold_not_merged(self):
+        """Electrodes whose closest contacts are 8.5 mm apart must stay separate
+        at distance_threshold=7.0 mm.
+
+        The old grid-based approach (cell_size=7 mm, 26-connectivity) put e1[0]
+        at cell (0,0,0) and e2[0] at cell (0,1,0) — adjacent — and incorrectly
+        merged all 16 contacts into one cluster.  Exact single-linkage must keep
+        them apart because 8.5 mm > 7.0 mm.
+        """
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8, spacing=3.5)
+        # Closest pair: e1[0]=(0,0,0) to e2[0]=(0,8.5,0) → 8.5 mm > threshold
+        e2 = self._make_centers([0, 8.5, 0], [0, 1, 0], 8, spacing=3.5)
+        all_centers = np.vstack([e1, e2])
+        clusters = cluster_into_electrodes(all_centers, distance_threshold=7.0)
+        assert len(clusters) == 2
+
 
 from SEEGFellowLib.electrode_detector import (
     fit_electrode_axis,
@@ -172,6 +188,92 @@ class TestDetectElectrodes:
             )
             == 1
         )
+
+    def test_electrodes_6mm_apart_not_merged_into_one(self):
+        """Electrodes whose closest contacts are 6 mm apart must each be detected.
+
+        The old threshold (expected_spacing * 2 = 7 mm) merged them into one
+        cluster whose PCA spacing is rejected.  The new threshold
+        (expected_spacing * 1.5 = 5.25 mm) keeps them separate.
+        """
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
+        # Closest pair: e1[0]=(0,0,0) to e2[0]=(0,6,0) → 6 mm
+        e2 = self._make_centers([0, 6.0, 0], [0, 1, 0], 8)
+        all_centers = np.vstack([e1, e2])
+        electrodes = detect_electrodes(all_centers)
+        assert len(electrodes) == 2
+
+
+class TestComposeIjkToWorld:
+    """_compose_ijk_to_world must include the parent transform when present."""
+
+    def test_no_parent_returns_intrinsic(self):
+        from SEEGFellowLib.electrode_detector import ElectrodeDetector
+
+        intrinsic = np.eye(4)
+        intrinsic[0, 3] = 10.0
+        result = ElectrodeDetector._compose_ijk_to_world(intrinsic, None)
+        np.testing.assert_array_equal(result, intrinsic)
+
+    def test_with_parent_composes_parent_times_intrinsic(self):
+        """world = parent @ intrinsic — contacts shift by parent offset."""
+        from SEEGFellowLib.electrode_detector import ElectrodeDetector
+
+        intrinsic = np.eye(4)
+        intrinsic[0, 3] = 10.0  # 10 mm x-offset in CT space
+        parent = np.eye(4)
+        parent[1, 3] = 20.0  # 20 mm y-shift (registration transform)
+        expected = parent @ intrinsic
+
+        result = ElectrodeDetector._compose_ijk_to_world(intrinsic, parent)
+        np.testing.assert_array_almost_equal(result, expected)
+
+
+class TestDetectAll:
+    """detect_all() must use the provided metal_mask and not recompute it."""
+
+    def test_uses_provided_metal_mask(self):
+        """detect_all() should call detect_contact_centers with the given mask
+        and must NOT call compute_head_mask or threshold_volume internally."""
+        from unittest.mock import MagicMock, patch
+
+        from SEEGFellowLib.electrode_detector import ElectrodeDetector
+
+        ct_array = np.zeros((20, 20, 20), dtype=np.float32)
+        metal_mask = np.zeros((20, 20, 20), dtype=np.uint8)
+
+        mock_ct_node = MagicMock()
+        mock_ct_node.GetSpacing.return_value = (1.0, 1.0, 1.0)
+        fake_centers = np.empty((0, 3))
+
+        # arrayFromVolume is imported lazily from slicer.util inside detect_all(),
+        # so inject it via sys.modules before the import executes.
+        slicer_util_mock = MagicMock()
+        slicer_util_mock.arrayFromVolume.return_value = ct_array
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"slicer": MagicMock(), "slicer.util": slicer_util_mock},
+            ),
+            patch(
+                "SEEGFellowLib.metal_segmenter.detect_contact_centers",
+                return_value=fake_centers,
+            ) as mock_detect,
+            patch("SEEGFellowLib.metal_segmenter.compute_head_mask") as mock_head,
+            patch("SEEGFellowLib.metal_segmenter.threshold_volume") as mock_thresh,
+        ):
+            detector = ElectrodeDetector()
+            result = detector.detect_all(mock_ct_node, metal_mask=metal_mask)
+
+        assert result == []
+        mock_detect.assert_called_once()
+        # The metal_mask passed to detect_contact_centers must be the one we provided
+        call_args = mock_detect.call_args
+        np.testing.assert_array_equal(call_args[0][1], metal_mask)
+        # compute_head_mask and threshold_volume must NOT have been called
+        mock_head.assert_not_called()
+        mock_thresh.assert_not_called()
 
 
 class TestDetectElectrodesWithNoise:

@@ -16,14 +16,18 @@ def cluster_into_electrodes(
     coords: np.ndarray,
     distance_threshold: float = 10.0,
 ) -> list[np.ndarray]:
-    """Group metal coordinates into electrode candidates using connected components.
+    """Group contact centers into electrode candidates using single-linkage clustering.
 
-    Uses a voxel-grid approach: discretize coords, find connected components,
-    then return coordinate arrays per component.
+    Two contacts are in the same cluster when the shortest chain of pairwise
+    distances connecting them never exceeds ``distance_threshold``.  This uses
+    exact Euclidean distances, avoiding the grid-cell quantisation artefact that
+    caused the old voxel-grid approach to merge contacts from adjacent electrodes
+    whose cells happened to be 26-connected.
 
     Args:
         coords: (N, 3) array of RAS coordinates.
-        distance_threshold: Max distance (mm) between voxels to consider connected.
+        distance_threshold: Max pairwise distance (mm) to consider two contacts
+            directly connected.  Typical value: ``expected_spacing * 2``.
 
     Returns:
         List of (M, 3) arrays, one per electrode candidate.
@@ -34,35 +38,19 @@ def cluster_into_electrodes(
     """
     if len(coords) == 0:
         return []
+    if len(coords) == 1:
+        return [coords]
 
-    # Discretize into a grid with cell size = distance_threshold
-    cell_size = distance_threshold
-    grid_coords = np.floor(coords / cell_size).astype(int)
+    from scipy.spatial.distance import pdist
+    from scipy.cluster.hierarchy import fcluster, linkage
 
-    # Shift to non-negative indices
-    grid_min = grid_coords.min(axis=0)
-    grid_coords -= grid_min
-
-    # Create binary volume
-    grid_max = grid_coords.max(axis=0)
-    grid_shape = tuple(grid_max + 1)
-    grid = np.zeros(grid_shape, dtype=np.uint8)
-
-    for gc in grid_coords:
-        grid[tuple(gc)] = 1
-
-    # Connected components on the grid
-    struct = ndimage.generate_binary_structure(3, 3)  # 26-connectivity
-    labeled_grid, num_components = ndimage.label(grid, structure=struct)
-
-    # Map each original point to its component
-    labels = np.array([labeled_grid[tuple(gc)] for gc in grid_coords])
+    dists = pdist(coords)
+    Z = linkage(dists, method="single")
+    labels = fcluster(Z, t=distance_threshold, criterion="distance")
 
     clusters = []
-    for comp_id in range(1, num_components + 1):
-        cluster_mask = labels == comp_id
-        clusters.append(coords[cluster_mask])
-
+    for label in np.unique(labels):
+        clusters.append(coords[labels == label])
     return clusters
 
 
@@ -297,7 +285,7 @@ def detect_electrodes(
     """
     # 1. Cluster centers into electrode candidates
     clusters = cluster_into_electrodes(
-        contact_centers, distance_threshold=expected_spacing * 2
+        contact_centers, distance_threshold=expected_spacing * 1.5
     )
 
     # 2. Merge collinear fragments (for gapped electrodes)
@@ -463,12 +451,21 @@ class ElectrodeDetector:
         if len(centers_ijk) == 0:
             return []
 
-        # Convert IJK to RAS
+        # Convert IJK to RAS.
+        # arrayFromVolume axes are (K, J, I); GetIJKToRASMatrix expects [I, J, K, 1].
+        # Reverse the last axis order before the matrix multiply.
         ijk_to_ras = self._get_ijk_to_ras_matrix(ct_volume_node)
-        ones = np.ones((len(centers_ijk), 1))
-        ijk_h = np.hstack([centers_ijk.astype(float), ones])
+        centers_ijk_reordered = centers_ijk[:, ::-1]  # [k,j,i] → [i,j,k]
+        ones = np.ones((len(centers_ijk_reordered), 1))
+        ijk_h = np.hstack([centers_ijk_reordered.astype(float), ones])
         ras_h = (ijk_to_ras @ ijk_h.T).T
         centers_ras = ras_h[:, :3]
+        print(
+            f"[SEEGFellow] RAS range"
+            f" R=[{centers_ras[:,0].min():.1f},{centers_ras[:,0].max():.1f}]"
+            f" A=[{centers_ras[:,1].min():.1f},{centers_ras[:,1].max():.1f}]"
+            f" S=[{centers_ras[:,2].min():.1f},{centers_ras[:,2].max():.1f}]"
+        )
 
         electrodes = detect_electrodes(
             centers_ras,
@@ -482,9 +479,41 @@ class ElectrodeDetector:
 
     @staticmethod
     def _get_ijk_to_ras_matrix(volume_node) -> np.ndarray:
-        """Get 4x4 IJK-to-RAS matrix from a volume node."""
+        """Get 4x4 IJK-to-world matrix from a volume node, including any
+        parent registration transform applied in the Slicer scene."""
         import vtk
 
         mat = vtk.vtkMatrix4x4()
         volume_node.GetIJKToRASMatrix(mat)
-        return np.array([[mat.GetElement(i, j) for j in range(4)] for i in range(4)])
+        intrinsic = np.array(
+            [[mat.GetElement(i, j) for j in range(4)] for i in range(4)]
+        )
+
+        parent_node = volume_node.GetParentTransformNode()
+        parent_4x4 = None
+        if parent_node is not None:
+            p_mat = vtk.vtkMatrix4x4()
+            parent_node.GetMatrixTransformToWorld(p_mat)
+            parent_4x4 = np.array(
+                [[p_mat.GetElement(i, j) for j in range(4)] for i in range(4)]
+            )
+
+        return ElectrodeDetector._compose_ijk_to_world(intrinsic, parent_4x4)
+
+    @staticmethod
+    def _compose_ijk_to_world(
+        intrinsic: np.ndarray, parent: np.ndarray | None
+    ) -> np.ndarray:
+        """Compose intrinsic IJK→RAS with an optional parent transform matrix.
+
+        Args:
+            intrinsic: 4×4 IJK-to-RAS matrix from the volume node itself.
+            parent: 4×4 world transform matrix of the parent node, or None.
+
+        Returns:
+            4×4 IJK-to-world matrix: ``parent @ intrinsic`` when a parent
+            exists, otherwise ``intrinsic`` unchanged.
+        """
+        if parent is None:
+            return intrinsic
+        return parent @ intrinsic

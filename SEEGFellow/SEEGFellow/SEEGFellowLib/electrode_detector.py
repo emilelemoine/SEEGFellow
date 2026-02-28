@@ -406,59 +406,59 @@ def detect_electrodes(
     contact_centers: np.ndarray,
     min_contacts: int = 3,
     expected_spacing: float = 3.5,
-    collinearity_tolerance: float = 10.0,
+    distance_tolerance: float = 2.0,
+    max_iterations: int = 1000,
     gap_ratio_threshold: float = 1.8,
     spacing_cutoff_factor: float = 0.65,
+    brain_centroid: np.ndarray | None = None,
 ) -> list[Electrode]:
-    """Full detection pipeline from pre-detected contact centers.
+    """Full detection pipeline: RANSAC grouping + axis fitting + orientation.
 
-    Each row in contact_centers is one contact center in RAS coordinates.
-    Steps: cluster -> merge collinear -> fit axis -> orient -> build Electrode.
+    Each row in contact_centers is one LoG-detected contact in RAS coordinates.
+    Original positions are preserved (no reprojection onto fitted axis).
 
     Args:
         contact_centers: (N, 3) array of contact center RAS coordinates.
-        min_contacts: Minimum contacts to accept an electrode candidate.
+        min_contacts: Minimum contacts to accept an electrode.
         expected_spacing: Expected contact spacing in mm.
-        collinearity_tolerance: Max angle for merging collinear fragments.
-        gap_ratio_threshold: Threshold for gap detection.
-        spacing_cutoff_factor: Fraction of expected_spacing below which a cluster's
-            contact spacing is considered implausibly small and rejected.
-            Default 0.65 preserves the previous hard-coded behavior.
+        distance_tolerance: RANSAC perpendicular distance tolerance in mm.
+        max_iterations: RANSAC trials per electrode.
+        gap_ratio_threshold: Threshold for gap detection in spacing analysis.
+        spacing_cutoff_factor: Fraction of expected_spacing below which a
+            cluster is rejected as noise.
+        brain_centroid: 3D RAS coordinates of brain center for orientation.
+            Falls back to (0, 0, 0) if None.
 
     Returns:
         List of Electrode objects with auto-numbered contacts (unnamed).
+        Contact positions are the original input coordinates.
 
     Example::
 
-        electrodes = detect_electrodes(contact_centers_ras)
+        electrodes = detect_electrodes(centers_ras, brain_centroid=centroid)
     """
-    # 1. Cluster centers into electrode candidates
-    clusters = cluster_into_electrodes(
-        contact_centers, distance_threshold=expected_spacing * 1.5
-    )
-
-    # 2. Merge collinear fragments (for gapped electrodes)
-    clusters = merge_collinear_clusters(
-        clusters, angle_tolerance=collinearity_tolerance
+    groups = ransac_group_contacts(
+        contact_centers,
+        expected_spacing=expected_spacing,
+        distance_tolerance=distance_tolerance,
+        max_iterations=max_iterations,
+        min_contacts=min_contacts,
     )
 
     electrodes = []
-    for cluster in clusters:
-        if len(cluster) < min_contacts:
-            continue
+    for group_coords in groups:
+        # Fit axis
+        center, direction = fit_electrode_axis(group_coords)
 
-        # 3. Fit axis through centers
-        center, direction = fit_electrode_axis(cluster)
-
-        # 4. Project centers onto axis — each projection IS a contact position
-        projections = np.dot(cluster - center, direction)
+        # Project onto axis, sort
+        projections = np.dot(group_coords - center, direction)
         sorted_indices = np.argsort(projections)
         sorted_projections = projections[sorted_indices]
 
-        # 5. Analyze spacing
+        # Analyze spacing
         spacing_info = analyze_spacing(sorted_projections, gap_ratio_threshold)
 
-        # Reject clusters whose spacing is implausibly small (scattered noise)
+        # Reject implausibly small spacing
         if (
             0
             < spacing_info["contact_spacing"]
@@ -466,12 +466,14 @@ def detect_electrodes(
         ):
             continue
 
-        # 6. Orient deepest first
+        # Orient deepest first
         orient_indices, oriented_dir = orient_deepest_first(
-            sorted_projections, center, direction
+            sorted_projections, center, direction, brain_centroid=brain_centroid
         )
+        # Map back through sorted_indices
+        final_indices = sorted_indices[orient_indices]
 
-        # 7. Build Electrode
+        # Build Electrode with original coordinates
         params = ElectrodeParams(
             contact_length=2.0,
             contact_spacing=spacing_info["contact_spacing"],
@@ -481,9 +483,8 @@ def detect_electrodes(
         )
 
         contacts = []
-        for i, idx in enumerate(orient_indices):
-            ras = center + sorted_projections[idx] * oriented_dir
-            contacts.append(Contact(index=i + 1, position_ras=tuple(ras)))
+        for i, idx in enumerate(final_indices):
+            contacts.append(Contact(index=i + 1, position_ras=tuple(group_coords[idx])))
 
         electrode = Electrode(
             name="",
@@ -544,13 +545,11 @@ class ElectrodeDetector:
         self,
         min_contacts: int = 3,
         expected_spacing: float = 3.5,
-        collinearity_tolerance: float = 10.0,
         gap_ratio_threshold: float = 1.8,
         spacing_cutoff_factor: float = 0.65,
     ):
         self.min_contacts = min_contacts
         self.expected_spacing = expected_spacing
-        self.collinearity_tolerance = collinearity_tolerance
         self.gap_ratio_threshold = gap_ratio_threshold
         self.spacing_cutoff_factor = spacing_cutoff_factor
 
@@ -620,7 +619,6 @@ class ElectrodeDetector:
             centers_ras,
             min_contacts=self.min_contacts,
             expected_spacing=self.expected_spacing,
-            collinearity_tolerance=self.collinearity_tolerance,
             gap_ratio_threshold=self.gap_ratio_threshold,
             spacing_cutoff_factor=self.spacing_cutoff_factor,
         )

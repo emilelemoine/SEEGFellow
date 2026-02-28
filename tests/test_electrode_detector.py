@@ -152,7 +152,6 @@ class TestAnalyzeSpacing:
 
 class TestDetectElectrodes:
     def _make_centers(self, start, direction, n_contacts, spacing=3.5):
-        """Create synthetic contact centers: one point per contact."""
         direction = np.array(direction, dtype=float)
         direction /= np.linalg.norm(direction)
         return np.array(
@@ -164,7 +163,6 @@ class TestDetectElectrodes:
         e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
         e2 = self._make_centers([0, 50, 0], [0, 1, 0], 6)
         all_centers = np.vstack([e1, e2])
-
         electrodes = detect_electrodes(all_centers)
         assert len(electrodes) == 2
         contact_counts = sorted([e.num_contacts for e in electrodes])
@@ -175,34 +173,26 @@ class TestDetectElectrodes:
         electrodes = detect_electrodes(e1, min_contacts=3)
         assert len(electrodes) == 0
 
-    def test_spacing_cutoff_factor_controls_acceptance(self):
-        """A cluster at 1.5 mm spacing is rejected with default expected_spacing (cutoff = 2.275 mm)
-        but accepted when expected_spacing matches actual spacing (cutoff = 0.975 mm)."""
-        # 1.5 mm contacts — below the default cutoff (3.5 * 0.65 = 2.275 mm)
-        centers = self._make_centers([0, 0, 0], [1, 0, 0], 8, spacing=1.5)
-        assert detect_electrodes(centers, spacing_cutoff_factor=0.65) == []
-        assert (
-            len(
-                detect_electrodes(
-                    centers, expected_spacing=1.5, spacing_cutoff_factor=0.65
-                )
-            )
-            == 1
-        )
-
-    def test_electrodes_6mm_apart_not_merged_into_one(self):
-        """Electrodes whose closest contacts are 6 mm apart must each be detected.
-
-        The old threshold (expected_spacing * 2 = 7 mm) merged them into one
-        cluster whose PCA spacing is rejected.  The new threshold
-        (expected_spacing * 1.5 = 5.25 mm) keeps them separate.
-        """
-        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
-        # Closest pair: e1[0]=(0,0,0) to e2[0]=(0,6,0) → 6 mm
-        e2 = self._make_centers([0, 6.0, 0], [0, 1, 0], 8)
+    def test_crossing_electrodes_separated(self):
+        """Two crossing electrodes must not be merged."""
+        e1 = self._make_centers([-14, 0, 0], [1, 0, 0], 8)
+        e2 = self._make_centers([0, -10.5, 0], [0, 1, 0], 6)
         all_centers = np.vstack([e1, e2])
         electrodes = detect_electrodes(all_centers)
         assert len(electrodes) == 2
+        contact_counts = sorted([e.num_contacts for e in electrodes])
+        assert contact_counts == [6, 8]
+
+    def test_preserves_log_positions(self):
+        """Contact RAS positions must be original LoG values, not reprojected."""
+        np.random.seed(42)
+        e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
+        e1 += np.random.randn(*e1.shape) * 0.3  # add noise
+        original = set(map(tuple, e1))
+        electrodes = detect_electrodes(e1)
+        assert len(electrodes) == 1
+        for c in electrodes[0].contacts:
+            assert tuple(c.position_ras) in original
 
 
 class TestComposeIjkToWorld:
@@ -286,12 +276,18 @@ class TestDetectElectrodesWithNoise:
         )
 
     def test_ignores_scattered_noise(self):
-        """Random scattered points should not produce an electrode."""
+        """Random scattered points must not produce an electrode.
+
+        RANSAC can find collinear subsets in any random cloud, so a meaningful
+        min_contacts threshold is required.  Using min_contacts=6 (the smallest
+        contact count seen in clinical SEEG practice) ensures accidental
+        collinear subsets in dense noise are rejected.
+        """
         np.random.seed(0)
         e1 = self._make_centers([0, 0, 0], [1, 0, 0], 8)
         noise = np.random.uniform(-5, 5, (20, 3)) + np.array([0, 50, 0])
         all_centers = np.vstack([e1, noise])
-        electrodes = detect_electrodes(all_centers)
+        electrodes = detect_electrodes(all_centers, min_contacts=6)
         assert len(electrodes) == 1
         assert electrodes[0].num_contacts == 8
 

@@ -101,6 +101,14 @@
        <layout class="QFormLayout">
         <item row="0" column="0"><widget class="QLabel"><property name="text"><string>Sigma (mm):</string></property></widget></item>
         <item row="0" column="1"><widget class="ctkSliderWidget" name="sigmaSlider"><property name="minimum"><double>0.5</double></property><property name="maximum"><double>3.0</double></property><property name="value"><double>1.2</double></property><property name="singleStep"><double>0.1</double></property></widget></item>
+        <item row="1" column="0"><widget class="QLabel"><property name="text"><string>Contact spacing (mm):</string></property></widget></item>
+        <item row="1" column="1"><widget class="QDoubleSpinBox" name="expectedSpacingSpinBox"><property name="minimum"><double>1.5</double></property><property name="maximum"><double>5.0</double></property><property name="value"><double>3.5</double></property><property name="singleStep"><double>0.5</double></property></widget></item>
+        <item row="2" column="0"><widget class="QLabel"><property name="text"><string>Min. contacts:</string></property></widget></item>
+        <item row="2" column="1"><widget class="QSpinBox" name="minContactsSpinBox"><property name="minimum"><number>2</number></property><property name="maximum"><number>16</number></property><property name="value"><number>3</number></property></widget></item>
+        <item row="3" column="0"><widget class="QLabel"><property name="text"><string>Max component voxels:</string></property></widget></item>
+        <item row="3" column="1"><widget class="QSpinBox" name="maxComponentVoxelsSpinBox"><property name="minimum"><number>50</number></property><property name="maximum"><number>2000</number></property><property name="value"><number>500</number></property><property name="singleStep"><number>50</number></property></widget></item>
+        <item row="4" column="0"><widget class="QLabel"><property name="text"><string>Spacing cutoff (%):</string></property></widget></item>
+        <item row="4" column="1"><widget class="ctkSliderWidget" name="spacingCutoffSlider"><property name="minimum"><double>30</double></property><property name="maximum"><double>90</double></property><property name="value"><double>65</double></property><property name="singleStep"><double>5</double></property></widget></item>
        </layout>
       </item>
       <item><widget class="QPushButton" name="detectElectrodesButton"><property name="text"><string>Detect All Electrodes</string></property></widget></item>

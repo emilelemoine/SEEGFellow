@@ -359,13 +359,48 @@ def detect_electrodes(
     return electrodes
 
 
+def _filter_contact_mask(
+    metal_mask: np.ndarray,
+    min_voxels: int = 3,
+    max_voxels: int = 500,
+) -> np.ndarray:
+    """Keep connected components whose size falls within [min_voxels, max_voxels].
+
+    Removes components that are too small (noise) or too large (entry bolts,
+    bone screws) to be SEEG electrode contacts.
+
+    Args:
+        metal_mask: Binary uint8 mask of candidate metal voxels.
+        min_voxels: Minimum component size to keep.
+        max_voxels: Maximum component size to keep.
+
+    Returns:
+        Filtered binary mask of the same shape.
+
+    Example::
+
+        contact_mask = _filter_contact_mask(metal_mask, min_voxels=3, max_voxels=500)
+    """
+    from scipy import ndimage as _ndi
+
+    labeled, n_comp = _ndi.label(metal_mask)
+    if n_comp == 0:
+        return np.zeros_like(metal_mask)
+    comp_sizes = _ndi.sum(metal_mask, labeled, range(1, n_comp + 1))
+    result = np.zeros_like(metal_mask)
+    for idx, size in enumerate(comp_sizes):
+        if min_voxels <= size <= max_voxels:
+            result[labeled == (idx + 1)] = 1
+    return result
+
+
 class ElectrodeDetector:
     """Slicer wrapper: detects all electrodes from a metal segmentation volume.
 
     Example (in Slicer Python console)::
 
         detector = ElectrodeDetector()
-        electrodes = detector.detect_all(metal_labelmap_node, ct_volume_node)
+        electrodes = detector.detect_all(ct_volume_node, metal_mask)
     """
 
     def __init__(
@@ -374,23 +409,31 @@ class ElectrodeDetector:
         expected_spacing: float = 3.5,
         collinearity_tolerance: float = 10.0,
         gap_ratio_threshold: float = 1.8,
+        spacing_cutoff_factor: float = 0.65,
     ):
         self.min_contacts = min_contacts
         self.expected_spacing = expected_spacing
         self.collinearity_tolerance = collinearity_tolerance
         self.gap_ratio_threshold = gap_ratio_threshold
+        self.spacing_cutoff_factor = spacing_cutoff_factor
 
     def detect_all(
-        self, ct_volume_node, threshold: float = 2500, sigma: float = 1.2
+        self,
+        ct_volume_node,
+        metal_mask: np.ndarray,
+        sigma: float = 1.2,
+        max_component_voxels: int = 500,
     ) -> list[Electrode]:
-        """From a CT volume, detect all electrodes using LoG contact center detection.
+        """From a CT volume and pre-computed metal mask, detect all electrodes.
 
-        Pipeline: head mask -> threshold within mask -> LoG blob detection -> electrode grouping.
+        Pipeline: filter metal mask by component size -> LoG blob detection -> electrode grouping.
 
         Args:
             ct_volume_node: vtkMRMLScalarVolumeNode with the post-implant CT.
-            threshold: HU threshold for metal (default 2500).
+            metal_mask: Pre-computed binary metal mask (numpy array, same shape as CT).
             sigma: LoG scale in voxels for contact detection.
+            max_component_voxels: Maximum connected-component size (voxels) to keep
+                as a contact candidate. Larger components are likely bolts or screws.
 
         Returns:
             List of Electrode objects.
@@ -398,21 +441,25 @@ class ElectrodeDetector:
         Example::
 
             detector = ElectrodeDetector()
-            electrodes = detector.detect_all(ct_volume_node, threshold=2500, sigma=1.2)
+            electrodes = detector.detect_all(ct_volume_node, metal_mask, sigma=1.2)
         """
         from slicer.util import arrayFromVolume
-        from SEEGFellowLib.metal_segmenter import (
-            compute_head_mask,
-            threshold_volume,
-            detect_contact_centers,
-        )
+        from SEEGFellowLib.metal_segmenter import detect_contact_centers
 
         ct_array = arrayFromVolume(ct_volume_node)
-        head_mask = compute_head_mask(ct_array)
-        metal_mask = threshold_volume(ct_array, threshold) & head_mask
+
+        contact_mask = _filter_contact_mask(
+            metal_mask, min_voxels=3, max_voxels=max_component_voxels
+        )
+        print(
+            f"[SEEGFellow] metal_mask nonzero={int(np.sum(metal_mask))}"
+            f"  removed_voxels={int(np.sum(metal_mask) - np.sum(contact_mask))}"
+            f"  (filtered to max {max_component_voxels} voxels)"
+        )
+        print(f"[SEEGFellow] contact_mask nonzero={int(np.sum(contact_mask))}")
 
         # LoG blob detection for contact centers (IJK coordinates)
-        centers_ijk = detect_contact_centers(ct_array, metal_mask, sigma=sigma)
+        centers_ijk = detect_contact_centers(ct_array, contact_mask, sigma=sigma)
         if len(centers_ijk) == 0:
             return []
 
@@ -423,13 +470,15 @@ class ElectrodeDetector:
         ras_h = (ijk_to_ras @ ijk_h.T).T
         centers_ras = ras_h[:, :3]
 
-        return detect_electrodes(
+        electrodes = detect_electrodes(
             centers_ras,
             min_contacts=self.min_contacts,
             expected_spacing=self.expected_spacing,
             collinearity_tolerance=self.collinearity_tolerance,
             gap_ratio_threshold=self.gap_ratio_threshold,
+            spacing_cutoff_factor=self.spacing_cutoff_factor,
         )
+        return electrodes
 
     @staticmethod
     def _get_ijk_to_ras_matrix(volume_node) -> np.ndarray:

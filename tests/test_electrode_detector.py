@@ -10,6 +10,7 @@ import numpy as np
 from SEEGFellowLib.electrode_detector import (
     cluster_into_electrodes,
 )
+from SEEGFellowLib.electrode_detector import _filter_contact_mask
 
 
 class TestClusterIntoElectrodes:
@@ -190,3 +191,36 @@ class TestDetectElectrodesWithNoise:
         electrodes = detect_electrodes(all_centers)
         assert len(electrodes) == 1
         assert electrodes[0].num_contacts == 8
+
+
+class TestFilterContactMask:
+    def _make_mask(self, shape=(20, 20, 20)):
+        return np.zeros(shape, dtype=np.uint8)
+
+    def test_keeps_components_within_range(self):
+        mask = self._make_mask()
+        # Component of 10 voxels — within [3, 500]
+        mask[0:10, 0, 0] = 1
+        result = _filter_contact_mask(mask, min_voxels=3, max_voxels=500)
+        assert result.sum() == 10
+
+    def test_removes_component_above_max(self):
+        mask = self._make_mask()
+        # Component of 600 voxels — above max_voxels=500
+        mask[0:10, 0:10, 0:6] = 1  # 10*10*6 = 600
+        result = _filter_contact_mask(mask, min_voxels=3, max_voxels=500)
+        assert result.sum() == 0
+
+    def test_removes_component_below_min(self):
+        mask = self._make_mask()
+        mask[0, 0, 0] = 1  # 1 voxel — below min=3
+        result = _filter_contact_mask(mask, min_voxels=3, max_voxels=500)
+        assert result.sum() == 0
+
+    def test_max_voxels_parameter_is_respected(self):
+        mask = self._make_mask()
+        mask[0:10, 0, 0] = 1  # 10 voxels
+        # With max_voxels=5 it should be excluded
+        assert _filter_contact_mask(mask, min_voxels=3, max_voxels=5).sum() == 0
+        # With max_voxels=15 it should be included
+        assert _filter_contact_mask(mask, min_voxels=3, max_voxels=15).sum() == 10

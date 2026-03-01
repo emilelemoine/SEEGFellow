@@ -711,7 +711,9 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
     # Step 4: Electrode detection
     # -------------------------------------------------------------------------
 
-    def run_intracranial_mask(self, strategy=None) -> None:
+    def run_intracranial_mask(
+        self, strategy=None, output_dir: str | None = None
+    ) -> None:
         """Compute brain parenchyma mask from the T1 MRI and display it.
 
         The mask is computed in MRI space using the given strategy, then
@@ -722,6 +724,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         Args:
             strategy: A BrainMaskStrategy instance.  Defaults to
                 SynthSegBrainMask if not provided.
+            output_dir: If set, SynthSeg output is saved here for reuse.
 
         Example::
 
@@ -749,7 +752,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
             [[ijkToRAS.GetElement(r, c) for c in range(4)] for r in range(4)]
         )
 
-        brain_mask_t1 = strategy.compute(t1_array, affine)
+        brain_mask_t1 = strategy.compute(t1_array, affine, output_dir=output_dir)
 
         # Store parcellation for downstream contact labeling
         from SEEGFellowLib.brain_mask import SynthSegBrainMask
@@ -787,89 +790,119 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
             f"[SEEGFellow] Brain mask voxel count in MRI space: "
             f"{np.sum(brain_mask_t1 > 0)}"
         )
-
-        # --- Create a temporary labelmap in MRI space ---
-        # Clone geometry entirely via IJKToRAS (encodes origin+spacing+directions)
-        brain_label_node = slicer.mrmlScene.AddNewNodeByClass(
-            "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_BrainMask_MRI"
-        )
-        ijkToRAS = vtk.vtkMatrix4x4()
-        self._t1_node.GetIJKToRASMatrix(ijkToRAS)
-        brain_label_node.SetIJKToRASMatrix(ijkToRAS)
-
-        updateVolumeFromArray(brain_label_node, brain_mask_t1)
-
-        # Inherit any parent transform the T1 carries (e.g. from registration)
-        t1_transform = self._t1_node.GetParentTransformNode()
-        if t1_transform is not None:
-            brain_label_node.SetAndObserveTransformNodeID(t1_transform.GetID())
-
-        # Harden all transforms on brain_label_node so it is in pure world (RAS) space
-        slicer.vtkSlicerTransformLogic.hardenTransform(brain_label_node)
-
-        # The resamplescalarvectordwivolume CLI reads only the local IJKToRAS of the
-        # reference volume (it does not follow parent transforms).  We must bake the
-        # CT's registration transform into its geometry for the resampling, then
-        # fully restore the node so the scene is not corrupted.
-        ct_ijk_to_ras_orig = vtk.vtkMatrix4x4()
-        self._ct_node.GetIJKToRASMatrix(ct_ijk_to_ras_orig)
-        ct_transform = self._ct_node.GetParentTransformNode()
-        ct_transform_id = ct_transform.GetID() if ct_transform is not None else None
-        if ct_transform_id is not None:
-            slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
-
-        # --- Resample into CT space ---
-        brain_label_ct = slicer.mrmlScene.AddNewNodeByClass(
-            "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_BrainMask_CT"
-        )
-        params = {
-            "inputVolume": brain_label_node.GetID(),
-            "referenceVolume": self._ct_node.GetID(),  # hardened → world-space geometry
-            "outputVolume": brain_label_ct.GetID(),
-            "interpolationMode": "NearestNeighbor",
-        }
-        slicer.cli.runSync(slicer.modules.resamplescalarvectordwivolume, None, params)
-
-        # Fully restore CT: reset the baked geometry and re-attach the original transform
-        if ct_transform_id is not None:
-            self._ct_node.SetIJKToRASMatrix(ct_ijk_to_ras_orig)
-            self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
-
-        brain_mask_in_ct = np.array(arrayFromVolume(brain_label_ct), dtype=np.uint8)
-        brain_mask_in_ct = (brain_mask_in_ct > 0).astype(np.uint8)
-
         print(
-            f"[SEEGFellow] Brain mask voxel count in CT space: "
-            f"{np.sum(brain_mask_in_ct > 0)}"
+            f"[SEEGFellow] T1 IJKToRAS diagonal (spacing): "
+            f"{[ijkToRAS.GetElement(i, i) for i in range(3)]}"
+        )
+        print(
+            f"[SEEGFellow] T1 has parent transform: "
+            f"{self._t1_node.GetParentTransformNode() is not None}"
         )
 
-        # --- Display as segmentation segment ---
-        if self._segmentation_node is None:
-            self._segmentation_node = slicer.mrmlScene.AddNewNodeByClass(
-                "vtkMRMLSegmentationNode", "SEEGFellow Segmentation"
+        # --- Create temporary nodes for resampling ---
+        brain_label_node = None
+        brain_label_ct = None
+        ct_world_ref = None
+        try:
+            # --- Create a temporary labelmap in MRI space ---
+            # Clone geometry entirely via IJKToRAS (encodes origin+spacing+directions)
+            brain_label_node = slicer.mrmlScene.AddNewNodeByClass(
+                "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_BrainMask_MRI"
             )
-            self._segmentation_node.CreateDefaultDisplayNodes()
-            self._segmentation_node.SetReferenceImageGeometryParameterFromVolumeNode(
-                self._ct_node
+            ijkToRAS_t1 = vtk.vtkMatrix4x4()
+            self._t1_node.GetIJKToRASMatrix(ijkToRAS_t1)
+            brain_label_node.SetIJKToRASMatrix(ijkToRAS_t1)
+
+            updateVolumeFromArray(brain_label_node, brain_mask_t1)
+
+            # Inherit any parent transform the T1 carries (e.g. from registration)
+            t1_transform = self._t1_node.GetParentTransformNode()
+            if t1_transform is not None:
+                brain_label_node.SetAndObserveTransformNodeID(t1_transform.GetID())
+
+            # Harden all transforms on brain_label_node so it is in pure world (RAS) space
+            slicer.vtkSlicerTransformLogic.hardenTransform(brain_label_node)
+
+            # The resampling CLI reads only the LOCAL IJKToRAS of the reference node;
+            # parent transforms are ignored.  Use a temporary reference node whose
+            # IJKToRAS is already in world space (baking in any registration transform).
+            ct_world_ijk_to_ras = self._world_ijk_to_ras_vtk(self._ct_node)
+            ct_world_ref = slicer.mrmlScene.AddNewNodeByClass(
+                "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_CT_WorldRef"
+            )
+            ct_world_ref.SetIJKToRASMatrix(ct_world_ijk_to_ras)
+
+            ct_local = vtk.vtkMatrix4x4()
+            self._ct_node.GetIJKToRASMatrix(ct_local)
+            print(
+                f"[SEEGFellow] CT local IJKToRAS origin: "
+                f"{[ct_local.GetElement(i, 3) for i in range(3)]}"
+            )
+            print(
+                f"[SEEGFellow] CT world IJKToRAS origin: "
+                f"{[ct_world_ijk_to_ras.GetElement(i, 3) for i in range(3)]}"
+            )
+            print(
+                f"[SEEGFellow] CT has parent transform: "
+                f"{self._ct_node.GetParentTransformNode() is not None}"
             )
 
-        seg = self._segmentation_node.GetSegmentation()
-        existing_id = seg.GetSegmentIdBySegmentName("Brain")
-        if existing_id:
-            seg.RemoveSegment(existing_id)
+            # --- Resample into CT space ---
+            brain_label_ct = slicer.mrmlScene.AddNewNodeByClass(
+                "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_BrainMask_CT"
+            )
+            params = {
+                "inputVolume": brain_label_node.GetID(),
+                "referenceVolume": ct_world_ref.GetID(),  # world-space geometry
+                "outputVolume": brain_label_ct.GetID(),
+                "interpolationMode": "NearestNeighbor",
+            }
+            slicer.cli.runSync(
+                slicer.modules.resamplescalarvectordwivolume, None, params
+            )
 
-        segment_id = seg.AddEmptySegment("Brain", "Brain")
-        seg.GetSegment(segment_id).SetColor(0.0, 0.5, 1.0)
-        # brain_label_ct carries world-space geometry (its IJKToRAS is the hardened
-        # CT transform), so the stored segment aligns with the CT in world space.
-        slicer.util.updateSegmentBinaryLabelmapFromArray(
-            brain_mask_in_ct, self._segmentation_node, segment_id, brain_label_ct
-        )
-        self._head_mask = brain_mask_in_ct
+            brain_mask_in_ct = np.array(arrayFromVolume(brain_label_ct), dtype=np.uint8)
+            brain_mask_in_ct = (brain_mask_in_ct > 0).astype(np.uint8)
 
-        # --- Clean up temporary nodes ---
-        slicer.mrmlScene.RemoveNode(brain_label_node)
-        slicer.mrmlScene.RemoveNode(brain_label_ct)
+            print(
+                f"[SEEGFellow] Brain mask voxel count in CT space: "
+                f"{np.sum(brain_mask_in_ct > 0)}"
+            )
+
+            # --- Display as segmentation segment ---
+            if self._segmentation_node is None:
+                self._segmentation_node = slicer.mrmlScene.AddNewNodeByClass(
+                    "vtkMRMLSegmentationNode", "SEEGFellow Segmentation"
+                )
+                self._segmentation_node.CreateDefaultDisplayNodes()
+                self._segmentation_node.SetReferenceImageGeometryParameterFromVolumeNode(
+                    self._ct_node
+                )
+
+            seg = self._segmentation_node.GetSegmentation()
+            existing_id = seg.GetSegmentIdBySegmentName("Brain")
+            if existing_id:
+                seg.RemoveSegment(existing_id)
+
+            segment_id = seg.AddEmptySegment("Brain", "Brain")
+            seg.GetSegment(segment_id).SetColor(0.0, 0.5, 1.0)
+            # brain_label_ct carries world-space geometry (its IJKToRAS matches the
+            # CT world-space geometry), so the stored segment aligns with the CT in
+            # world space.
+            slicer.util.updateSegmentBinaryLabelmapFromArray(
+                brain_mask_in_ct, self._segmentation_node, segment_id, brain_label_ct
+            )
+            self._head_mask = brain_mask_in_ct
+
+            # Remove temporary reference node now that segment is created
+            slicer.mrmlScene.RemoveNode(ct_world_ref)
+            ct_world_ref = None
+        finally:
+            for tmp in (brain_label_node, brain_label_ct):
+                if tmp is not None:
+                    slicer.mrmlScene.RemoveNode(tmp)
+            if ct_world_ref is not None:
+                slicer.mrmlScene.RemoveNode(ct_world_ref)
 
     def run_metal_threshold(self, threshold: float = 2000) -> None:
         """Threshold CT within intracranial mask and display as a segment.

@@ -11,12 +11,12 @@ import numpy as np
 from scipy import ndimage
 
 
-def threshold_volume(volume: np.ndarray, threshold: float = 2000) -> np.ndarray:
+def threshold_volume(volume: np.ndarray, threshold: float = 2500) -> np.ndarray:
     """Threshold a CT volume to isolate high-intensity voxels.
 
     Example::
 
-        mask = threshold_volume(ct_array, threshold=2000)
+        mask = threshold_volume(ct_array, threshold=2500)
     """
     return (volume >= threshold).astype(np.uint8)
 

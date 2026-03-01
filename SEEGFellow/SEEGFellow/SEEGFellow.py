@@ -1101,9 +1101,11 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                 label_ct = slicer.mrmlScene.AddNewNodeByClass(
                     "vtkMRMLLabelMapVolumeNode", f"_SEEGFellow_{safe_name}_CT"
                 )
-                ct_transform_id = None
-                if self._ct_node.GetParentTransformNode() is not None:
-                    ct_transform_id = self._ct_node.GetParentTransformNodeID()
+                ct_transform = self._ct_node.GetParentTransformNode()
+                ct_transform_id = (
+                    ct_transform.GetID() if ct_transform is not None else None
+                )
+                if ct_transform_id is not None:
                     slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
 
                 params = {

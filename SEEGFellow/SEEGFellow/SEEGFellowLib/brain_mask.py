@@ -31,12 +31,18 @@ class BrainMaskStrategy(Protocol):
 
     name: str
 
-    def compute(self, volume: np.ndarray, affine: np.ndarray) -> np.ndarray:
+    def compute(
+        self,
+        volume: np.ndarray,
+        affine: np.ndarray,
+        output_dir: str | None = None,
+    ) -> np.ndarray:
         """Compute a binary brain mask from a T1-weighted MRI volume.
 
         Args:
             volume: 3-D numpy array (arbitrary intensity scale).
             affine: 4x4 voxel-to-world (IJK-to-RAS) transformation matrix.
+            output_dir: If set, save and reuse cached results in this directory.
 
         Returns:
             Binary uint8 mask (1 = brain, 0 = outside).
@@ -164,7 +170,12 @@ class SynthSegBrainMask:
         """Return True if mri_synthseg is found on PATH or in FREESURFER_HOME."""
         return self._find_executable() is not None
 
-    def compute(self, volume: np.ndarray, affine: np.ndarray) -> np.ndarray:
+    def compute(
+        self,
+        volume: np.ndarray,
+        affine: np.ndarray,
+        output_dir: str | None = None,
+    ) -> np.ndarray:
         """Run SynthSeg parcellation and return binarized brain mask.
 
         After calling this method, ``self.parcellation`` contains the full
@@ -174,14 +185,37 @@ class SynthSegBrainMask:
         Args:
             volume: 3-D numpy array (arbitrary intensity scale).
             affine: 4x4 voxel-to-world (IJK-to-RAS) transformation matrix.
+            output_dir: If set, save the SynthSeg output here and reuse
+                cached results on subsequent runs.
 
         Returns:
             Binary uint8 mask (1 = brain, 0 = outside).
 
         Raises:
             RuntimeError: If mri_synthseg is not available or fails.
+
+        Example::
+
+            strategy = SynthSegBrainMask()
+            mask = strategy.compute(volume, affine, output_dir="/tmp/seeg")
         """
         import nibabel as nib
+
+        # Check for cached result in output_dir
+        cached_path = None
+        if output_dir:
+            cached_path = os.path.join(output_dir, "synthseg_parc.nii.gz")
+            if os.path.isfile(cached_path):
+                print(f"[SEEGFellow] Loading cached SynthSeg result: {cached_path}")
+                seg_img = nib.load(cached_path)
+                seg_affine = np.array(seg_img.affine)
+                parcellation = np.asarray(seg_img.dataobj, dtype=np.int32).T
+                self.parcellation = parcellation
+                self.parcellation_affine = seg_affine
+                mask = (parcellation > 0).astype(np.uint8)
+                if mask.sum() == 0:
+                    raise RuntimeError("cached brain mask is empty")
+                return mask
 
         executable = self._find_executable()
         if executable is None:
@@ -226,6 +260,14 @@ class SynthSegBrainMask:
             seg_affine = np.array(seg_img.affine)
             # Transpose from NIfTI (I,J,K) to Slicer's (K,J,I).
             parcellation = np.asarray(seg_img.dataobj, dtype=np.int32).T
+
+            # Save to output_dir for future reuse
+            if cached_path and output_dir:
+                import shutil as _shutil
+
+                os.makedirs(output_dir, exist_ok=True)
+                _shutil.copy2(output_path, cached_path)
+                print(f"[SEEGFellow] Saved SynthSeg result to: {cached_path}")
 
         self.parcellation = parcellation
         self.parcellation_affine = seg_affine

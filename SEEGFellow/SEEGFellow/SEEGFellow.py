@@ -627,7 +627,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         Args:
             strategy: A BrainMaskStrategy instance.  Defaults to
-                ScipyBrainMask if not provided.
+                SynthSegBrainMask if not provided.
 
         Example::
 

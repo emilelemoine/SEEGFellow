@@ -1071,8 +1071,12 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
             ("Right Hemisphere", RIGHT_HEMISPHERE_LABELS, (0.75, 0.65, 0.65)),
         ]
 
-        # Harden CT once before the loop so repeated harden/restore cycles
-        # don't compound the transform (T^n drift).
+        # Harden CT once before the loop so the CLI sees world-space geometry,
+        # then fully restore both IJKToRAS and parent transform afterwards
+        # (hardenTransform bakes the parent into IJKToRAS, so restoring just the
+        # parent ID without resetting IJKToRAS would double-apply it).
+        ct_ijk_to_ras_orig = vtk.vtkMatrix4x4()
+        self._ct_node.GetIJKToRASMatrix(ct_ijk_to_ras_orig)
         ct_transform = self._ct_node.GetParentTransformNode()
         ct_transform_id = ct_transform.GetID() if ct_transform is not None else None
         if ct_transform_id is not None:
@@ -1149,8 +1153,9 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                         if tmp is not None:
                             slicer.mrmlScene.RemoveNode(tmp)
         finally:
-            # Restore CT transform once after all hemispheres are processed.
+            # Fully restore CT: reset geometry then re-attach the original transform.
             if ct_transform_id is not None:
+                self._ct_node.SetIJKToRASMatrix(ct_ijk_to_ras_orig)
                 self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
 
     def run_metal_threshold(self, threshold: float = 2500) -> None:

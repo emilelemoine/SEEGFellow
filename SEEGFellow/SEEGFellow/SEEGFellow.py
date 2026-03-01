@@ -911,7 +911,6 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
             logic.run_metal_threshold(threshold=2000)
         """
-        import vtk
         from SEEGFellowLib.metal_segmenter import threshold_volume
         from slicer.util import arrayFromVolume
 
@@ -928,23 +927,18 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         segment_id = seg.AddEmptySegment("Metal", "Metal")
         seg.GetSegment(segment_id).SetColor(1.0, 1.0, 0.0)
 
-        # updateSegmentBinaryLabelmapFromArray uses only the local IJKToRAS of the
-        # reference node (parent transforms are not followed).  Harden the CT
-        # temporarily so the segment is stored in world space, matching the brain mask.
-        ct_ijk_to_ras_orig = vtk.vtkMatrix4x4()
-        self._ct_node.GetIJKToRASMatrix(ct_ijk_to_ras_orig)
-        ct_transform = self._ct_node.GetParentTransformNode()
-        ct_transform_id = ct_transform.GetID() if ct_transform is not None else None
-        if ct_transform_id is not None:
-            slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
-
-        slicer.util.updateSegmentBinaryLabelmapFromArray(
-            metal_mask, self._segmentation_node, segment_id, self._ct_node
+        ct_world_ijk_to_ras = self._world_ijk_to_ras_vtk(self._ct_node)
+        ct_world_ref = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_CT_WorldRef"
         )
+        ct_world_ref.SetIJKToRASMatrix(ct_world_ijk_to_ras)
 
-        if ct_transform_id is not None:
-            self._ct_node.SetIJKToRASMatrix(ct_ijk_to_ras_orig)
-            self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
+        try:
+            slicer.util.updateSegmentBinaryLabelmapFromArray(
+                metal_mask, self._segmentation_node, segment_id, ct_world_ref
+            )
+        finally:
+            slicer.mrmlScene.RemoveNode(ct_world_ref)
 
         self._metal_mask = metal_mask
 

@@ -127,8 +127,12 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         # Determine furthest-reached step and uncollapse that panel
         has_brain = self.logic._head_mask is not None
         has_metal = self.logic._metal_mask is not None
+        has_parcellation = self.logic._parcellation is not None
+        has_electrodes = len(self.logic.electrodes) > 0
 
-        if has_metal:
+        if has_parcellation and has_electrodes:
+            self.ui.labelContactsCollapsibleButton.collapsed = False
+        elif has_metal:
             self.ui.contactDetectionCollapsibleButton.collapsed = False
         elif has_brain:
             self.ui.metalThresholdCollapsibleButton.collapsed = False
@@ -610,6 +614,22 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                 )
                 self._metal_mask = (metal_array > 0).astype(np.uint8)
 
+        # Restore parcellation if saved
+        parc_node = slicer.util.getFirstNodeByClassByName(
+            "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_SynthSeg_Parcellation"
+        )
+        if parc_node is not None:
+            import vtk
+
+            self._parcellation = np.array(
+                slicer.util.arrayFromVolume(parc_node), dtype=np.int32
+            )
+            mat = vtk.vtkMatrix4x4()
+            parc_node.GetIJKToRASMatrix(mat)
+            self._parcellation_affine = np.array(
+                [[mat.GetElement(r, c) for c in range(4)] for r in range(4)]
+            )
+
         return True
 
     # -------------------------------------------------------------------------
@@ -715,6 +735,28 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         ):
             self._parcellation = strategy.parcellation
             self._parcellation_affine = strategy.parcellation_affine
+
+        # Save parcellation as a label map node for scene persistence
+        if self._parcellation is not None:
+            parc_node = slicer.util.getFirstNodeByClassByName(
+                "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_SynthSeg_Parcellation"
+            )
+            if parc_node is None:
+                parc_node = slicer.mrmlScene.AddNewNodeByClass(
+                    "vtkMRMLLabelMapVolumeNode", "_SEEGFellow_SynthSeg_Parcellation"
+                )
+            # Set geometry from parcellation affine
+            mat = vtk.vtkMatrix4x4()
+            for r_idx in range(4):
+                for c_idx in range(4):
+                    mat.SetElement(
+                        r_idx, c_idx, float(self._parcellation_affine[r_idx, c_idx])
+                    )
+            parc_node.SetIJKToRASMatrix(mat)
+            # Store the parcellation (transpose from Slicer K,J,I back to NIfTI I,J,K
+            # for the label map node, then Slicer handles it internally)
+            updateVolumeFromArray(parc_node, self._parcellation)
+            parc_node.SetHideFromEditors(True)
 
         print(
             f"[SEEGFellow] Brain mask voxel count in MRI space: "

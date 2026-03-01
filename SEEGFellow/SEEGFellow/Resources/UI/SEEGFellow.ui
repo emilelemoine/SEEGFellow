@@ -161,6 +161,18 @@
     </widget>
    </item>
 
+   <!-- Step 5: Label Contacts -->
+   <item>
+    <widget class="ctkCollapsibleButton" name="labelContactsCollapsibleButton">
+     <property name="text"><string>Step 5: Label Contacts</string></property>
+     <property name="collapsed"><bool>true</bool></property>
+     <layout class="QVBoxLayout" name="labelContactsLayout">
+      <item><widget class="QPushButton" name="labelContactsButton"><property name="text"><string>Label All Contacts</string></property></widget></item>
+      <item><widget class="QTableWidget" name="anatomyTable"/></item>
+     </layout>
+    </widget>
+   </item>
+
    <!-- Step 6: Review &amp; Export -->
    <item>
     <widget class="ctkCollapsibleButton" name="exportCollapsibleButton">

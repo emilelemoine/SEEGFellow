@@ -62,6 +62,9 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         # Step 4: Rename Electrodes
         self.ui.applyNamesButton.clicked.connect(self._on_apply_names_clicked)
 
+        # Step 5: Label Contacts
+        self.ui.labelContactsButton.clicked.connect(self._on_label_contacts_clicked)
+
         # Results & Export
         self.ui.exportCsvButton.clicked.connect(self._on_export_csv_clicked)
 
@@ -89,9 +92,9 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         )
 
         # Set up contact table columns
-        self.ui.contactTable.setColumnCount(5)
+        self.ui.contactTable.setColumnCount(6)
         self.ui.contactTable.setHorizontalHeaderLabels(
-            ["Electrode", "Contact", "R", "A", "S"]
+            ["Electrode", "Contact", "R", "A", "S", "Region"]
         )
         self.ui.contactTable.horizontalHeader().setStretchLastSection(True)
 
@@ -391,8 +394,41 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self._restore_electrode_colors()
         self._refresh_electrode_list()
         self._populate_contact_table()
-        self.ui.exportCollapsibleButton.collapsed = False
+        self.ui.labelContactsCollapsibleButton.collapsed = False
         slicer.util.showStatusMessage("Names applied.")
+
+    def _on_label_contacts_clicked(self):
+        self._ensure_session_restored()
+        try:
+            slicer.util.showStatusMessage("Labeling contacts...")
+            self.logic.run_contact_labeling()
+            self._populate_anatomy_table()
+            slicer.util.showStatusMessage("Contact labeling complete.")
+            self.ui.exportCollapsibleButton.collapsed = False
+        except Exception as e:
+            slicer.util.errorDisplay(f"Contact labeling failed: {e}")
+
+    def _populate_anatomy_table(self):
+        from qt import QTableWidgetItem
+
+        electrodes = self.logic.electrodes
+        if not electrodes:
+            return
+
+        max_contacts = max(e.num_contacts for e in electrodes)
+        sorted_electrodes = sorted(electrodes, key=lambda e: e.name)
+
+        table = self.ui.anatomyTable
+        table.setRowCount(len(sorted_electrodes))
+        table.setColumnCount(max_contacts)
+        table.setHorizontalHeaderLabels([str(i + 1) for i in range(max_contacts)])
+        table.setVerticalHeaderLabels([e.name for e in sorted_electrodes])
+
+        for row, electrode in enumerate(sorted_electrodes):
+            for col, contact in enumerate(electrode.contacts):
+                table.setItem(row, col, QTableWidgetItem(contact.region))
+
+        table.resizeColumnsToContents()
 
     def _restore_electrode_colors(self) -> None:
         """Reset all electrode fiducial colors to their assigned palette colors."""
@@ -409,12 +445,25 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     def _populate_contact_table(self):
         from qt import QTableWidgetItem
 
+        self.ui.contactTable.setColumnCount(6)
+        self.ui.contactTable.setHorizontalHeaderLabels(
+            ["Electrode", "Contact", "R", "A", "S", "Region"]
+        )
+        self.ui.contactTable.horizontalHeader().setStretchLastSection(True)
+
         rows = []
         for electrode in self.logic.electrodes:
             for contact in electrode.contacts:
                 r, a, s = contact.position_ras
                 rows.append(
-                    (electrode.name, contact.label, f"{r:.2f}", f"{a:.2f}", f"{s:.2f}")
+                    (
+                        electrode.name,
+                        contact.label,
+                        f"{r:.2f}",
+                        f"{a:.2f}",
+                        f"{s:.2f}",
+                        contact.region,
+                    )
                 )
 
         self.ui.contactTable.setRowCount(len(rows))
@@ -863,6 +912,37 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         self._create_fiducials_for_electrodes()
 
+    def run_contact_labeling(self) -> None:
+        """Label each contact with its anatomical region from the SynthSeg parcellation.
+
+        Requires parcellation (from run_intracranial_mask with SynthSeg) and
+        detected electrodes.
+
+        Example::
+
+            logic.run_contact_labeling()
+            for e in logic.electrodes:
+                for c in e.contacts:
+                    print(c.label, c.region)
+        """
+        import numpy as np
+        from SEEGFellowLib.contact_labeler import label_contacts
+
+        if self._parcellation is None:
+            raise RuntimeError(
+                "No parcellation available. Run brain segmentation (SynthSeg) first."
+            )
+        if not self.electrodes:
+            raise RuntimeError("No electrodes detected. Run electrode detection first.")
+
+        for electrode in self.electrodes:
+            contacts_ras = np.array([c.position_ras for c in electrode.contacts])
+            regions = label_contacts(
+                contacts_ras, self._parcellation, self._parcellation_affine
+            )
+            for contact, region in zip(electrode.contacts, regions):
+                contact.region = region
+
     # 20 visually distinct colors for electrode fiducials (tab20-inspired)
     ELECTRODE_COLORS = [
         (0.122, 0.467, 0.706),  # blue
@@ -937,7 +1017,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
     # -------------------------------------------------------------------------
 
     def export_csv(self, path: str) -> None:
-        """Export all contact positions to a CSV file.
+        """Export all contact positions and regions to a CSV file.
 
         Example::
 
@@ -947,11 +1027,13 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
         with open(path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["Electrode", "Contact", "R", "A", "S"])
+            writer.writerow(["Electrode", "Contact", "R", "A", "S", "Region"])
             for electrode in self.electrodes:
                 for contact in electrode.contacts:
                     r, a, s = contact.position_ras
-                    writer.writerow([electrode.name, contact.label, r, a, s])
+                    writer.writerow(
+                        [electrode.name, contact.label, r, a, s, contact.region]
+                    )
 
     def delete_electrode(self, index: int) -> None:
         """Remove an electrode and its fiducials from the session.

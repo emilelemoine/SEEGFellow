@@ -1146,7 +1146,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
 
                     # 50 % opacity so electrodes remain visible through the surface
                     display_node = self._segmentation_node.GetDisplayNode()
-                    display_node.SetSegmentOpacity3D(segment_id, 0.5)
+                    display_node.SetSegmentOpacity3D(segment_id, 1.0)
 
                 finally:
                     for tmp in (label_node, label_ct):

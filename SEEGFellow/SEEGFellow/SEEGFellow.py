@@ -1071,79 +1071,87 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
             ("Right Hemisphere", RIGHT_HEMISPHERE_LABELS, (0.75, 0.65, 0.65)),
         ]
 
-        for name, labels, color in hemispheres:
-            mask = np.isin(self._parcellation, sorted(labels)).astype(np.uint8)
+        # Harden CT once before the loop so repeated harden/restore cycles
+        # don't compound the transform (T^n drift).
+        ct_transform = self._ct_node.GetParentTransformNode()
+        ct_transform_id = ct_transform.GetID() if ct_transform is not None else None
+        if ct_transform_id is not None:
+            slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
 
-            label_node = None
-            label_ct = None
-            try:
-                # --- Temp labelmap in parcellation (SynthSeg 1 mm) space ---
-                safe_name = name.replace(" ", "")
-                label_node = slicer.mrmlScene.AddNewNodeByClass(
-                    "vtkMRMLLabelMapVolumeNode", f"_SEEGFellow_{safe_name}_MRI"
-                )
-                mask_mat = vtk.vtkMatrix4x4()
-                for r_idx in range(4):
-                    for c_idx in range(4):
-                        mask_mat.SetElement(
-                            r_idx, c_idx, float(self._parcellation_affine[r_idx, c_idx])
-                        )
-                label_node.SetIJKToRASMatrix(mask_mat)
-                updateVolumeFromArray(label_node, mask)
+        try:
+            for name, labels, color in hemispheres:
+                mask = np.isin(self._parcellation, sorted(labels)).astype(np.uint8)
 
-                # Inherit and harden T1 parent transform (CT→T1 registration)
-                t1_transform = self._t1_node.GetParentTransformNode()
-                if t1_transform is not None:
-                    label_node.SetAndObserveTransformNodeID(t1_transform.GetID())
-                slicer.vtkSlicerTransformLogic.hardenTransform(label_node)
+                label_node = None
+                label_ct = None
+                try:
+                    # --- Temp labelmap in parcellation (SynthSeg 1 mm) space ---
+                    safe_name = name.replace(" ", "")
+                    label_node = slicer.mrmlScene.AddNewNodeByClass(
+                        "vtkMRMLLabelMapVolumeNode", f"_SEEGFellow_{safe_name}_MRI"
+                    )
+                    mask_mat = vtk.vtkMatrix4x4()
+                    for r_idx in range(4):
+                        for c_idx in range(4):
+                            mask_mat.SetElement(
+                                r_idx,
+                                c_idx,
+                                float(self._parcellation_affine[r_idx, c_idx]),
+                            )
+                    label_node.SetIJKToRASMatrix(mask_mat)
+                    updateVolumeFromArray(label_node, mask)
 
-                # --- Resample to CT space ---
-                label_ct = slicer.mrmlScene.AddNewNodeByClass(
-                    "vtkMRMLLabelMapVolumeNode", f"_SEEGFellow_{safe_name}_CT"
-                )
-                ct_transform = self._ct_node.GetParentTransformNode()
-                ct_transform_id = (
-                    ct_transform.GetID() if ct_transform is not None else None
-                )
-                if ct_transform_id is not None:
-                    slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
+                    # Inherit and harden T1 parent transform (CT→T1 registration)
+                    t1_transform = self._t1_node.GetParentTransformNode()
+                    if t1_transform is not None:
+                        label_node.SetAndObserveTransformNodeID(t1_transform.GetID())
+                    slicer.vtkSlicerTransformLogic.hardenTransform(label_node)
 
-                params = {
-                    "inputVolume": label_node.GetID(),
-                    "referenceVolume": self._ct_node.GetID(),
-                    "outputVolume": label_ct.GetID(),
-                    "interpolationMode": "NearestNeighbor",
-                }
-                slicer.cli.runSync(
-                    slicer.modules.resamplescalarvectordwivolume, None, params
-                )
+                    # --- Resample to CT space (CT is already hardened above) ---
+                    label_ct = slicer.mrmlScene.AddNewNodeByClass(
+                        "vtkMRMLLabelMapVolumeNode", f"_SEEGFellow_{safe_name}_CT"
+                    )
+                    params = {
+                        "inputVolume": label_node.GetID(),
+                        "referenceVolume": self._ct_node.GetID(),
+                        "outputVolume": label_ct.GetID(),
+                        "interpolationMode": "NearestNeighbor",
+                    }
+                    slicer.cli.runSync(
+                        slicer.modules.resamplescalarvectordwivolume, None, params
+                    )
 
-                if ct_transform_id:
-                    self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
+                    hemi_mask = (np.array(arrayFromVolume(label_ct)) > 0).astype(
+                        np.uint8
+                    )
+                    print(
+                        f"[SEEGFellow] {name} voxel count in CT space: {hemi_mask.sum()}"
+                    )
 
-                hemi_mask = (np.array(arrayFromVolume(label_ct)) > 0).astype(np.uint8)
-                print(f"[SEEGFellow] {name} voxel count in CT space: {hemi_mask.sum()}")
+                    # --- Add segment ---
+                    seg = self._segmentation_node.GetSegmentation()
+                    existing_id = seg.GetSegmentIdBySegmentName(name)
+                    if existing_id:
+                        seg.RemoveSegment(existing_id)
 
-                # --- Add segment ---
-                seg = self._segmentation_node.GetSegmentation()
-                existing_id = seg.GetSegmentIdBySegmentName(name)
-                if existing_id:
-                    seg.RemoveSegment(existing_id)
+                    segment_id = seg.AddEmptySegment(name, name)
+                    seg.GetSegment(segment_id).SetColor(*color)
+                    slicer.util.updateSegmentBinaryLabelmapFromArray(
+                        hemi_mask, self._segmentation_node, segment_id, label_ct
+                    )
 
-                segment_id = seg.AddEmptySegment(name, name)
-                seg.GetSegment(segment_id).SetColor(*color)
-                slicer.util.updateSegmentBinaryLabelmapFromArray(
-                    hemi_mask, self._segmentation_node, segment_id, label_ct
-                )
+                    # 50 % opacity so electrodes remain visible through the surface
+                    display_node = self._segmentation_node.GetDisplayNode()
+                    display_node.SetSegmentOpacity3D(segment_id, 0.5)
 
-                # 50 % opacity so electrodes remain visible through the surface
-                display_node = self._segmentation_node.GetDisplayNode()
-                display_node.SetSegmentOpacity3D(segment_id, 0.5)
-
-            finally:
-                for tmp in (label_node, label_ct):
-                    if tmp is not None:
-                        slicer.mrmlScene.RemoveNode(tmp)
+                finally:
+                    for tmp in (label_node, label_ct):
+                        if tmp is not None:
+                            slicer.mrmlScene.RemoveNode(tmp)
+        finally:
+            # Restore CT transform once after all hemispheres are processed.
+            if ct_transform_id is not None:
+                self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
 
     def run_metal_threshold(self, threshold: float = 2500) -> None:
         """Threshold CT within intracranial mask and display as a segment.

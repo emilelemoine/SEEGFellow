@@ -16,6 +16,7 @@ class Contact:
     index: int  # 1-based (1 = deepest/mesial)
     position_ras: tuple[float, float, float]  # (R, A, S) in mm
     label: str = ""
+    region: str = ""
 
 
 @dataclass

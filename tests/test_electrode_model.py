@@ -21,6 +21,14 @@ class TestContact:
         c = Contact(index=3, position_ras=(0.0, 0.0, 0.0))
         assert c.label == ""
 
+    def test_contact_region_defaults_to_empty(self):
+        c = Contact(index=1, position_ras=(0.0, 0.0, 0.0))
+        assert c.region == ""
+
+    def test_contact_region_can_be_set(self):
+        c = Contact(index=1, position_ras=(0.0, 0.0, 0.0), region="Left Hippocampus")
+        assert c.region == "Left Hippocampus"
+
 
 class TestElectrodeParams:
     def test_params_without_gaps(self):

@@ -1,7 +1,6 @@
 from SEEGFellowLib.brain_mask import (
     BrainMaskStrategy,
-    ScipyBrainMask,
-    SynthStripBrainMask,
+    SynthSegBrainMask,
     get_available_strategies,
 )
 from SEEGFellowLib.electrode_model import Contact, Electrode, ElectrodeParams

@@ -74,6 +74,8 @@
         </item>
         <item row="3" column="0"><widget class="QLabel"><property name="text"><string>CPU threads:</string></property></widget></item>
         <item row="3" column="1"><widget class="QSpinBox" name="synthSegThreadsSpinBox"><property name="minimum"><number>1</number></property><property name="maximum"><number>16</number></property><property name="value"><number>1</number></property></widget></item>
+        <item row="4" column="0"><widget class="QLabel"><property name="text"><string>Output directory:</string></property></widget></item>
+        <item row="4" column="1"><widget class="ctkPathLineEdit" name="synthSegOutputDirLineEdit"><property name="filters"><enum>ctkPathLineEdit::Dirs</enum></property><property name="toolTip"><string>Save SynthSeg output here for reuse across sessions</string></property></widget></item>
        </layout>
       </item>
       <item><widget class="QPushButton" name="computeHeadMaskButton"><property name="text"><string>Compute Segmentation</string></property></widget></item>

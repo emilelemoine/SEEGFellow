@@ -222,9 +222,11 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             )
             return
 
+        output_dir = self.ui.synthSegOutputDirLineEdit.currentPath or None
+
         try:
             slicer.util.showStatusMessage("Running SynthSeg brain segmentation...")
-            self.logic.run_intracranial_mask(strategy=strategy)
+            self.logic.run_intracranial_mask(strategy=strategy, output_dir=output_dir)
             slicer.util.showStatusMessage("Brain segmentation complete.")
             self.ui.metalThresholdCollapsibleButton.collapsed = False
             # Update status label

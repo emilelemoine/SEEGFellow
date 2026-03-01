@@ -41,7 +41,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui.registerButton.clicked.connect(self._on_register_clicked)
 
         # Step 3a: Intracranial Mask
-        self._setup_brain_mask_combo()
+        self._setup_synthseg_ui()
         self.ui.computeHeadMaskButton.clicked.connect(
             self._on_compute_head_mask_clicked
         )
@@ -98,29 +98,23 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         # Auto-restore from saved scene
         self._try_restore_session()
 
-    def _setup_brain_mask_combo(self):
-        """Populate the brain mask strategy combo box with available strategies.
+    def _setup_synthseg_ui(self):
+        """Check FreeSurfer availability and configure status label."""
+        from SEEGFellowLib.brain_mask import SynthSegBrainMask
 
-        Inserts a QComboBox above the 'Compute Intracranial Mask' button,
-        listing only strategies where is_available() returns True.
-        """
-        from qt import QComboBox, QLabel
-
-        from SEEGFellowLib.brain_mask import get_available_strategies
-
-        strategies = [s for s in get_available_strategies() if s.is_available()]
-        self._brain_mask_strategies = strategies
-
-        self._brainMaskMethodComboBox = QComboBox()
-        for strategy in strategies:
-            self._brainMaskMethodComboBox.addItem(strategy.name)
-
-        # Insert label + combo box before the "Compute Intracranial Mask" button
-        button = self.ui.computeHeadMaskButton
-        layout = button.parent().layout()
-        button_index = layout.indexOf(button)
-        layout.insertWidget(button_index, QLabel("Method:"))
-        layout.insertWidget(button_index + 1, self._brainMaskMethodComboBox)
+        strategy = SynthSegBrainMask()
+        if strategy.is_available():
+            self.ui.freesurferStatusLabel.setText("Found")
+            self.ui.freesurferPathLabel.visible = False
+            self.ui.freesurferPathLineEdit.visible = False
+        else:
+            self.ui.freesurferStatusLabel.setText("Not found — set path below")
+            self.ui.freesurferPathLabel.visible = True
+            self.ui.freesurferPathLineEdit.visible = True
+            # Check Slicer settings for a saved path
+            saved_path = slicer.app.settings().value("SEEGFellow/FreeSurferHome", "")
+            if saved_path:
+                self.ui.freesurferPathLineEdit.currentPath = saved_path
 
     def _try_restore_session(self):
         """Attempt to reconnect to nodes from a saved Slicer scene."""
@@ -199,21 +193,39 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             self.logic.try_restore_from_scene()
 
     def _on_compute_head_mask_clicked(self):
-        if not self._brain_mask_strategies:
-            slicer.util.errorDisplay("No brain mask method available.")
-            return
         self._ensure_session_restored()
-        idx = self._brainMaskMethodComboBox.currentIndex
-        strategy = self._brain_mask_strategies[idx]
-        try:
-            slicer.util.showStatusMessage(
-                f"Computing brain mask from MRI ({strategy.name})..."
+
+        # Resolve FreeSurfer path if set via the UI browse widget
+        fs_path = self.ui.freesurferPathLineEdit.currentPath
+        if fs_path:
+            import os
+
+            os.environ["FREESURFER_HOME"] = fs_path
+            slicer.app.settings().setValue("SEEGFellow/FreeSurferHome", fs_path)
+
+        from SEEGFellowLib.brain_mask import SynthSegBrainMask
+
+        robust = self.ui.synthSegModeComboBox.currentIndex == 0
+        threads = self.ui.synthSegThreadsSpinBox.value
+        strategy = SynthSegBrainMask(robust=robust, threads=threads)
+
+        if not strategy.is_available():
+            slicer.util.errorDisplay(
+                "FreeSurfer not found. Set FREESURFER_HOME or browse to the install directory."
             )
+            return
+
+        try:
+            slicer.util.showStatusMessage("Running SynthSeg brain segmentation...")
             self.logic.run_intracranial_mask(strategy=strategy)
-            slicer.util.showStatusMessage("Brain parenchyma mask computed.")
+            slicer.util.showStatusMessage("Brain segmentation complete.")
             self.ui.metalThresholdCollapsibleButton.collapsed = False
+            # Update status label
+            self.ui.freesurferStatusLabel.setText("Found")
+            self.ui.freesurferPathLabel.visible = False
+            self.ui.freesurferPathLineEdit.visible = False
         except Exception as e:
-            slicer.util.errorDisplay(f"Failed to compute brain mask: {e}")
+            slicer.util.errorDisplay(f"SynthSeg failed: {e}")
 
     def _on_edit_head_mask_clicked(self):
         if self.logic._segmentation_node is None:
@@ -473,6 +485,8 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._segmentation_node = None
         self._head_mask = None
         self._metal_mask = None
+        self._parcellation = None
+        self._parcellation_affine = None
 
     def cleanup(self):
         pass
@@ -624,9 +638,9 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         from slicer.util import arrayFromVolume, updateVolumeFromArray
 
         if strategy is None:
-            from SEEGFellowLib.brain_mask import ScipyBrainMask
+            from SEEGFellowLib.brain_mask import SynthSegBrainMask
 
-            strategy = ScipyBrainMask()
+            strategy = SynthSegBrainMask()
 
         if self._t1_node is None:
             raise RuntimeError("T1 MRI not loaded. Complete Step 1 first.")
@@ -642,6 +656,16 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         )
 
         brain_mask_t1 = strategy.compute(t1_array, affine)
+
+        # Store parcellation for downstream contact labeling
+        from SEEGFellowLib.brain_mask import SynthSegBrainMask
+
+        if (
+            isinstance(strategy, SynthSegBrainMask)
+            and strategy.parcellation is not None
+        ):
+            self._parcellation = strategy.parcellation
+            self._parcellation_affine = strategy.parcellation_affine
 
         print(
             f"[SEEGFellow] Brain mask voxel count in MRI space: "

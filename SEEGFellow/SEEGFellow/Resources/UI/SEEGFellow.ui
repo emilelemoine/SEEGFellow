@@ -53,13 +53,30 @@
     </widget>
    </item>
 
-   <!-- Step 3a: Intracranial Mask -->
+   <!-- Step 3a: Brain Segmentation (SynthSeg) -->
    <item>
     <widget class="ctkCollapsibleButton" name="intracranialMaskCollapsibleButton">
-     <property name="text"><string>Step 3a: Intracranial Mask</string></property>
+     <property name="text"><string>Step 3a: Brain Segmentation</string></property>
      <property name="collapsed"><bool>true</bool></property>
      <layout class="QVBoxLayout" name="intracranialMaskLayout">
-      <item><widget class="QPushButton" name="computeHeadMaskButton"><property name="text"><string>Compute Intracranial Mask</string></property></widget></item>
+      <item>
+       <layout class="QFormLayout" name="synthSegFormLayout">
+        <item row="0" column="0"><widget class="QLabel"><property name="text"><string>FreeSurfer:</string></property></widget></item>
+        <item row="0" column="1"><widget class="QLabel" name="freesurferStatusLabel"><property name="text"><string>Checking...</string></property></widget></item>
+        <item row="1" column="0"><widget class="QLabel" name="freesurferPathLabel"><property name="text"><string>FreeSurfer path:</string></property><property name="visible"><bool>false</bool></property></widget></item>
+        <item row="1" column="1"><widget class="ctkPathLineEdit" name="freesurferPathLineEdit"><property name="visible"><bool>false</bool></property><property name="filters"><enum>ctkPathLineEdit::Dirs</enum></property></widget></item>
+        <item row="2" column="0"><widget class="QLabel"><property name="text"><string>Mode:</string></property></widget></item>
+        <item row="2" column="1">
+         <widget class="QComboBox" name="synthSegModeComboBox">
+          <item><property name="text"><string>Robust (recommended)</string></property></item>
+          <item><property name="text"><string>Fast</string></property></item>
+         </widget>
+        </item>
+        <item row="3" column="0"><widget class="QLabel"><property name="text"><string>CPU threads:</string></property></widget></item>
+        <item row="3" column="1"><widget class="QSpinBox" name="synthSegThreadsSpinBox"><property name="minimum"><number>1</number></property><property name="maximum"><number>16</number></property><property name="value"><number>1</number></property></widget></item>
+       </layout>
+      </item>
+      <item><widget class="QPushButton" name="computeHeadMaskButton"><property name="text"><string>Compute Segmentation</string></property></widget></item>
       <item><widget class="QPushButton" name="editHeadMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
      </layout>
     </widget>

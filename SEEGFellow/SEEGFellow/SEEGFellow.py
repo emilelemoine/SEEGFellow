@@ -7,6 +7,10 @@ from slicer.ScriptedLoadableModule import (
     ScriptedLoadableModuleLogic,
     ScriptedLoadableModuleTest,
 )
+from SEEGFellowLib.hemisphere_labels import (
+    LEFT_HEMISPHERE_LABELS as _LEFT_HEMISPHERE_LABELS,
+    RIGHT_HEMISPHERE_LABELS as _RIGHT_HEMISPHERE_LABELS,
+)
 
 
 class SEEGFellow(ScriptedLoadableModule):
@@ -19,6 +23,14 @@ class SEEGFellow(ScriptedLoadableModule):
             "Semi-automatic SEEG electrode localization from post-implant CT."
         )
         self.parent.acknowledgementText = ""
+
+
+def _strip_hemisphere(region: str) -> str:
+    """Remove leading 'Left ' or 'Right ' from an anatomical region name."""
+    for prefix in ("Left ", "Right "):
+        if region.startswith(prefix):
+            return region[len(prefix) :]
+    return region
 
 
 class SEEGFellowWidget(ScriptedLoadableModuleWidget):
@@ -64,6 +76,30 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
 
         # Step 5: Label Contacts
         self.ui.labelContactsButton.clicked.connect(self._on_label_contacts_clicked)
+        self._left_anatomy_electrodes: list = []
+        self._right_anatomy_electrodes: list = []
+        self.ui.leftAnatomyTable.cellClicked.connect(
+            lambda row, col: self._on_anatomy_table_cell_clicked(
+                row, col, self._left_anatomy_electrodes
+            )
+        )
+        self.ui.rightAnatomyTable.cellClicked.connect(
+            lambda row, col: self._on_anatomy_table_cell_clicked(
+                row, col, self._right_anatomy_electrodes
+            )
+        )
+        self.ui.leftAnatomyCopyButton.clicked.connect(
+            lambda: self._on_anatomy_copy_html(self._left_anatomy_electrodes)
+        )
+        self.ui.rightAnatomyCopyButton.clicked.connect(
+            lambda: self._on_anatomy_copy_html(self._right_anatomy_electrodes)
+        )
+        self.ui.leftAnatomyExportButton.clicked.connect(
+            lambda: self._on_anatomy_export_tsv(self._left_anatomy_electrodes)
+        )
+        self.ui.rightAnatomyExportButton.clicked.connect(
+            lambda: self._on_anatomy_export_tsv(self._right_anatomy_electrodes)
+        )
 
         # Results & Export
         self.ui.exportCsvButton.clicked.connect(self._on_export_csv_clicked)
@@ -80,6 +116,8 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             table.setColumnCount(3)
             table.setHorizontalHeaderLabels(["Label", "Contacts", "Note"])
             table.horizontalHeader().setStretchLastSection(True)
+            # Ensure at least 16 rows are visible even when the table is empty
+            table.setMinimumHeight(530)
         self.ui.leftElectrodeTable.cellClicked.connect(
             lambda row, col: self._on_electrode_table_row_clicked(
                 row, col, self.ui.leftElectrodeTable, self._left_electrode_indices
@@ -170,15 +208,28 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self._ensure_session_restored()
         try:
             self.logic.create_rough_transform()
-            self.ui.roughTransformComboBox.setCurrentNode(
-                self.logic._rough_transform_node
-            )
+            self._setup_registration_view()
             slicer.util.selectModule("Transforms")
             slicer.util.showStatusMessage(
                 "Transform created. Adjust in Transforms module."
             )
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to create transform: {e}")
+
+    def _setup_registration_view(self) -> None:
+        """Show T1 (foreground, 50%) over CT in all slice views for registration."""
+        t1_node = self.logic._t1_node
+        ct_node = self.logic._ct_node
+        if t1_node is None or ct_node is None:
+            return
+        layout_manager = slicer.app.layoutManager()
+        for name in layout_manager.sliceViewNames():
+            composite = (
+                layout_manager.sliceWidget(name).sliceLogic().GetSliceCompositeNode()
+            )
+            composite.SetBackgroundVolumeID(ct_node.GetID())
+            composite.SetForegroundVolumeID(t1_node.GetID())
+            composite.SetForegroundOpacity(0.5)
 
     def _on_register_clicked(self):
         self._ensure_session_restored()
@@ -421,20 +472,136 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         if not electrodes:
             return
 
-        max_contacts = max(e.num_contacts for e in electrodes)
-        sorted_electrodes = sorted(electrodes, key=lambda e: e.name)
+        # Split by hemisphere: R >= 0 is right, R < 0 is left
+        left_electrodes = sorted(
+            [
+                e
+                for e in electrodes
+                if e.contacts and e.contacts[-1].position_ras[0] < 0
+            ],
+            key=lambda e: e.name,
+        )
+        right_electrodes = sorted(
+            [
+                e
+                for e in electrodes
+                if e.contacts and e.contacts[-1].position_ras[0] >= 0
+            ],
+            key=lambda e: e.name,
+        )
 
-        table = self.ui.anatomyTable
-        table.setRowCount(len(sorted_electrodes))
-        table.setColumnCount(max_contacts)
-        table.setHorizontalHeaderLabels([str(i + 1) for i in range(max_contacts)])
-        table.setVerticalHeaderLabels([e.name for e in sorted_electrodes])
+        def _fill(table, hemisphere_electrodes):
+            if not hemisphere_electrodes:
+                table.setRowCount(0)
+                table.setColumnCount(0)
+                return
+            max_contacts = max(e.num_contacts for e in hemisphere_electrodes)
+            table.setRowCount(len(hemisphere_electrodes))
+            table.setColumnCount(max_contacts)
+            table.setHorizontalHeaderLabels([str(i + 1) for i in range(max_contacts)])
+            table.setVerticalHeaderLabels([e.name for e in hemisphere_electrodes])
+            for row, electrode in enumerate(hemisphere_electrodes):
+                for col, contact in enumerate(electrode.contacts):
+                    display_region = _strip_hemisphere(contact.region)
+                    item = QTableWidgetItem(display_region)
+                    item.setToolTip(contact.region)
+                    table.setItem(row, col, item)
+            # Narrow fixed column width
+            for col in range(max_contacts):
+                table.setColumnWidth(col, 90)
+            # Show at least 15 rows (~30px/row + 30px header)
+            table.setMinimumHeight(480)
 
-        for row, electrode in enumerate(sorted_electrodes):
-            for col, contact in enumerate(electrode.contacts):
-                table.setItem(row, col, QTableWidgetItem(contact.region))
+        self._right_anatomy_electrodes = right_electrodes
+        self._left_anatomy_electrodes = left_electrodes
+        _fill(self.ui.rightAnatomyTable, right_electrodes)
+        _fill(self.ui.leftAnatomyTable, left_electrodes)
 
-        table.resizeColumnsToContents()
+    def _on_anatomy_table_cell_clicked(
+        self, row: int, col: int, electrodes_list: list
+    ) -> None:
+        """Highlight the clicked contact's electrode in red and jump slice views to it."""
+        if row < 0 or row >= len(electrodes_list):
+            return
+        electrode = electrodes_list[row]
+        if col < 0 or col >= len(electrode.contacts):
+            return
+
+        colors = SEEGFellowLogic.ELECTRODE_COLORS
+        for idx, e in enumerate(self.logic.electrodes):
+            node = slicer.mrmlScene.GetNodeByID(e.markups_node_id)
+            if node is None:
+                continue
+            display = node.GetDisplayNode()
+            if e is electrode:
+                display.SetSelectedColor(1.0, 0.0, 0.0)
+                display.SetColor(1.0, 0.0, 0.0)
+                display.SetOpacity(1.0)
+            else:
+                color = colors[idx % len(colors)]
+                display.SetSelectedColor(*color)
+                display.SetColor(*color)
+                display.SetOpacity(0.7)
+
+        r, a, s = electrode.contacts[col].position_ras
+        slicer.modules.markups.logic().JumpSlicesToLocation(r, a, s, True)
+
+    def _anatomy_to_tsv(self, electrodes_list: list) -> str:
+        """Build a TSV string from the anatomy electrode list (hemisphere-prefix stripped)."""
+        if not electrodes_list:
+            return ""
+        max_contacts = max(len(e.contacts) for e in electrodes_list)
+        header = "\t".join(["Electrode"] + [str(i + 1) for i in range(max_contacts)])
+        rows = [header]
+        for electrode in electrodes_list:
+            cells = [electrode.name] + [
+                _strip_hemisphere(c.region) for c in electrode.contacts
+            ]
+            rows.append("\t".join(cells))
+        return "\n".join(rows)
+
+    def _on_anatomy_copy_html(self, electrodes_list: list) -> None:
+        """Copy the anatomy table as an HTML table to the clipboard."""
+        import qt
+
+        if not electrodes_list:
+            return
+        max_contacts = max(len(e.contacts) for e in electrodes_list)
+        header_cells = "".join(f"<th>{i + 1}</th>" for i in range(max_contacts))
+        body_rows = ""
+        for electrode in electrodes_list:
+            cells = "".join(
+                f"<td>{_strip_hemisphere(c.region)}</td>" for c in electrode.contacts
+            )
+            cells += "<td></td>" * (max_contacts - len(electrode.contacts))
+            body_rows += f"<tr><th>{electrode.name}</th>{cells}</tr>"
+        html = (
+            f"<table><thead><tr><th>Electrode</th>{header_cells}</tr></thead>"
+            f"<tbody>{body_rows}</tbody></table>"
+        )
+        mime = qt.QMimeData()
+        mime.setHtml(html)
+        mime.setText(self._anatomy_to_tsv(electrodes_list))
+        qt.QApplication.clipboard().setMimeData(mime)
+        slicer.util.showStatusMessage("Anatomy table copied as HTML.")
+
+    def _on_anatomy_export_tsv(self, electrodes_list: list) -> None:
+        """Export the anatomy table as a TSV file."""
+        if not electrodes_list:
+            return
+        path = slicer.util.saveFileDialog(
+            caption="Export anatomy as TSV",
+            directory="",
+            filter="TSV files (*.tsv)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self._anatomy_to_tsv(electrodes_list))
+            slicer.util.showStatusMessage(f"Anatomy exported to {path}")
+        except Exception as e:
+            slicer.util.errorDisplay(f"Export failed: {e}")
 
     def _restore_electrode_colors(self) -> None:
         """Reset all electrode fiducial colors to their assigned palette colors."""
@@ -869,12 +1036,12 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                 if tmp is not None:
                     slicer.mrmlScene.RemoveNode(tmp)
 
-    def run_metal_threshold(self, threshold: float = 2000) -> None:
+    def run_metal_threshold(self, threshold: float = 2500) -> None:
         """Threshold CT within intracranial mask and display as a segment.
 
         Example::
 
-            logic.run_metal_threshold(threshold=2000)
+            logic.run_metal_threshold(threshold=2500)
         """
         from SEEGFellowLib.metal_segmenter import threshold_volume
         from slicer.util import arrayFromVolume
@@ -921,7 +1088,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         min_contacts: int = 3,
         max_component_voxels: int = 500,
         spacing_cutoff_factor: float = 0.65,
-        distance_tolerance: float = 2.0,
+        distance_tolerance: float = 1.5,
         max_iterations: int = 1000,
     ) -> None:
         """Run LoG contact detection, group into electrodes, and place fiducials.

@@ -1036,6 +1036,113 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                 if tmp is not None:
                     slicer.mrmlScene.RemoveNode(tmp)
 
+        # Add hemisphere surface segments for 3-D visualization
+        from SEEGFellowLib.brain_mask import SynthSegBrainMask
+
+        if isinstance(strategy, SynthSegBrainMask) and self._parcellation is not None:
+            self._add_hemisphere_segments()
+
+    def _add_hemisphere_segments(self) -> None:
+        """Add Left/Right Hemisphere segments from the SynthSeg parcellation.
+
+        Uses all left- and right-hemisphere DKT labels to build a binary mask
+        whose outer 3-D surface shows cortical gyri and sulci. Each hemisphere is
+        resampled to CT space using the same pipeline as the Brain segment.
+        Segments are set to 50 % 3-D opacity so electrodes remain visible.
+
+        Called automatically at the end of run_intracranial_mask when a
+        SynthSegBrainMask strategy was used.
+
+        Example::
+
+            logic.run_intracranial_mask()  # calls _add_hemisphere_segments internally
+        """
+        import numpy as np
+        import vtk
+        import slicer
+        from slicer.util import arrayFromVolume, updateVolumeFromArray
+        from SEEGFellowLib.hemisphere_labels import (
+            LEFT_HEMISPHERE_LABELS,
+            RIGHT_HEMISPHERE_LABELS,
+        )
+
+        hemispheres = [
+            ("Left Hemisphere", LEFT_HEMISPHERE_LABELS, (0.6, 0.65, 0.75)),
+            ("Right Hemisphere", RIGHT_HEMISPHERE_LABELS, (0.75, 0.65, 0.65)),
+        ]
+
+        for name, labels, color in hemispheres:
+            mask = np.isin(self._parcellation, sorted(labels)).astype(np.uint8)
+
+            label_node = None
+            label_ct = None
+            try:
+                # --- Temp labelmap in parcellation (SynthSeg 1 mm) space ---
+                safe_name = name.replace(" ", "")
+                label_node = slicer.mrmlScene.AddNewNodeByClass(
+                    "vtkMRMLLabelMapVolumeNode", f"_SEEGFellow_{safe_name}_MRI"
+                )
+                mask_mat = vtk.vtkMatrix4x4()
+                for r_idx in range(4):
+                    for c_idx in range(4):
+                        mask_mat.SetElement(
+                            r_idx, c_idx, float(self._parcellation_affine[r_idx, c_idx])
+                        )
+                label_node.SetIJKToRASMatrix(mask_mat)
+                updateVolumeFromArray(label_node, mask)
+
+                # Inherit and harden T1 parent transform (CT→T1 registration)
+                t1_transform = self._t1_node.GetParentTransformNode()
+                if t1_transform is not None:
+                    label_node.SetAndObserveTransformNodeID(t1_transform.GetID())
+                slicer.vtkSlicerTransformLogic.hardenTransform(label_node)
+
+                # --- Resample to CT space ---
+                label_ct = slicer.mrmlScene.AddNewNodeByClass(
+                    "vtkMRMLLabelMapVolumeNode", f"_SEEGFellow_{safe_name}_CT"
+                )
+                ct_transform_id = None
+                if self._ct_node.GetParentTransformNode() is not None:
+                    ct_transform_id = self._ct_node.GetParentTransformNodeID()
+                    slicer.vtkSlicerTransformLogic.hardenTransform(self._ct_node)
+
+                params = {
+                    "inputVolume": label_node.GetID(),
+                    "referenceVolume": self._ct_node.GetID(),
+                    "outputVolume": label_ct.GetID(),
+                    "interpolationMode": "NearestNeighbor",
+                }
+                slicer.cli.runSync(
+                    slicer.modules.resamplescalarvectordwivolume, None, params
+                )
+
+                if ct_transform_id:
+                    self._ct_node.SetAndObserveTransformNodeID(ct_transform_id)
+
+                hemi_mask = (np.array(arrayFromVolume(label_ct)) > 0).astype(np.uint8)
+                print(f"[SEEGFellow] {name} voxel count in CT space: {hemi_mask.sum()}")
+
+                # --- Add segment ---
+                seg = self._segmentation_node.GetSegmentation()
+                existing_id = seg.GetSegmentIdBySegmentName(name)
+                if existing_id:
+                    seg.RemoveSegment(existing_id)
+
+                segment_id = seg.AddEmptySegment(name, name)
+                seg.GetSegment(segment_id).SetColor(*color)
+                slicer.util.updateSegmentBinaryLabelmapFromArray(
+                    hemi_mask, self._segmentation_node, segment_id, label_ct
+                )
+
+                # 50 % opacity so electrodes remain visible through the surface
+                display_node = self._segmentation_node.GetDisplayNode()
+                display_node.SetSegmentOpacity3D(segment_id, 0.5)
+
+            finally:
+                for tmp in (label_node, label_ct):
+                    if tmp is not None:
+                        slicer.mrmlScene.RemoveNode(tmp)
+
     def run_metal_threshold(self, threshold: float = 2500) -> None:
         """Threshold CT within intracranial mask and display as a segment.
 

@@ -541,6 +541,31 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         self._parcellation = None
         self._parcellation_affine = None
 
+    @staticmethod
+    def _world_ijk_to_ras_vtk(volume_node):
+        """Return a vtkMatrix4x4 mapping IJK → world RAS for *volume_node*.
+
+        Composes the node's local IJKToRAS with any parent transform.
+        Uses GetMatrixTransformToWorld on the *transform node* (not the
+        volume), matching the proven pattern in
+        ElectrodeDetector._get_ijk_to_ras_matrix().
+        """
+        import vtk
+
+        local = vtk.vtkMatrix4x4()
+        volume_node.GetIJKToRASMatrix(local)
+
+        parent = volume_node.GetParentTransformNode()
+        if parent is None:
+            return local
+
+        world_xform = vtk.vtkMatrix4x4()
+        parent.GetMatrixTransformToWorld(world_xform)
+
+        result = vtk.vtkMatrix4x4()
+        vtk.vtkMatrix4x4.Multiply4x4(world_xform, local, result)
+        return result
+
     def cleanup(self):
         pass
 

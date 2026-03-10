@@ -57,6 +57,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui.computeHeadMaskButton.clicked.connect(
             self._on_compute_head_mask_clicked
         )
+        self.ui.loadLabelMapButton.clicked.connect(self._on_load_label_map_clicked)
         self.ui.editHeadMaskButton.clicked.connect(self._on_edit_head_mask_clicked)
 
         # Step 3b: Metal Threshold
@@ -286,6 +287,28 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
             self.ui.freesurferPathLineEdit.visible = False
         except Exception as e:
             slicer.util.errorDisplay(f"SynthSeg failed: {e}")
+
+    def _on_load_label_map_clicked(self):
+        self._ensure_session_restored()
+        label_map_path = self.ui.labelMapPathLineEdit.currentPath
+        if not label_map_path:
+            slicer.util.errorDisplay("Please select a label map NIfTI file.")
+            return
+
+        from SEEGFellowLib.brain_mask import PrecomputedParcellation
+
+        strategy = PrecomputedParcellation(label_map_path)
+        if not strategy.is_available():
+            slicer.util.errorDisplay(f"File not found: {label_map_path}")
+            return
+
+        try:
+            slicer.util.showStatusMessage("Loading label map...")
+            self.logic.run_intracranial_mask(strategy=strategy)
+            slicer.util.showStatusMessage("Label map loaded.")
+            self.ui.metalThresholdCollapsibleButton.collapsed = False
+        except Exception as e:
+            slicer.util.errorDisplay(f"Failed to load label map: {e}")
 
     def _on_edit_head_mask_clicked(self):
         if self.logic._segmentation_node is None:
@@ -899,12 +922,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
         brain_mask_t1 = strategy.compute(t1_array, affine, output_dir=output_dir)
 
         # Store parcellation for downstream contact labeling
-        from SEEGFellowLib.brain_mask import SynthSegBrainMask
-
-        if (
-            isinstance(strategy, SynthSegBrainMask)
-            and strategy.parcellation is not None
-        ):
+        if getattr(strategy, "parcellation", None) is not None:
             self._parcellation = strategy.parcellation
             self._parcellation_affine = strategy.parcellation_affine
 
@@ -1037,9 +1055,7 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
                     slicer.mrmlScene.RemoveNode(tmp)
 
         # Add hemisphere surface segments for 3-D visualization
-        from SEEGFellowLib.brain_mask import SynthSegBrainMask
-
-        if isinstance(strategy, SynthSegBrainMask) and self._parcellation is not None:
+        if self._parcellation is not None:
             self._add_hemisphere_segments()
 
     def _add_hemisphere_segments(self) -> None:

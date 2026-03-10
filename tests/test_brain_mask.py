@@ -12,6 +12,7 @@ import pytest
 
 from SEEGFellowLib.brain_mask import (
     BrainMaskStrategy,
+    PrecomputedParcellation,
     SynthSegBrainMask,
     get_available_strategies,
 )
@@ -193,6 +194,61 @@ class TestSynthSegBrainMask:
 
     def test_implements_protocol(self):
         assert isinstance(SynthSegBrainMask(), BrainMaskStrategy)
+
+
+class TestPrecomputedParcellation:
+    def test_is_available_true_when_file_exists(self, tmp_path):
+        import nibabel as nib
+
+        parc = np.zeros((10, 10, 10), dtype=np.int32)
+        parc[4:6, 4:6, 4:6] = 17
+        path = str(tmp_path / "parc.nii.gz")
+        nib.save(nib.Nifti1Image(parc, np.eye(4)), path)
+
+        strategy = PrecomputedParcellation(path)
+        assert strategy.is_available() is True
+
+    def test_is_available_false_when_file_missing(self):
+        strategy = PrecomputedParcellation("/nonexistent/parc.nii.gz")
+        assert strategy.is_available() is False
+
+    def test_compute_loads_parcellation_and_mask(self, tmp_path):
+        import nibabel as nib
+
+        parc_nifti = np.zeros((10, 10, 10), dtype=np.int32)
+        parc_nifti[3:7, 3:7, 3:7] = 53
+        affine = np.diag([1.0, 1.0, 1.0, 1.0])
+        path = str(tmp_path / "parc.nii.gz")
+        nib.save(nib.Nifti1Image(parc_nifti, affine), path)
+
+        strategy = PrecomputedParcellation(path)
+        mask = strategy.compute(np.zeros((10, 10, 10)), np.eye(4))
+
+        assert mask.dtype == np.uint8
+        assert set(np.unique(mask)).issubset({0, 1})
+        expected = (parc_nifti.T > 0).astype(np.uint8)
+        np.testing.assert_array_equal(mask, expected)
+        assert strategy.parcellation is not None
+        assert strategy.parcellation.shape == (10, 10, 10)
+        np.testing.assert_array_equal(strategy.parcellation_affine, affine)
+
+    def test_compute_raises_on_missing_file(self):
+        strategy = PrecomputedParcellation("/nonexistent/parc.nii.gz")
+        with pytest.raises(RuntimeError, match="not found"):
+            strategy.compute(np.zeros((5, 5, 5)), np.eye(4))
+
+    def test_compute_raises_on_empty_parcellation(self, tmp_path):
+        import nibabel as nib
+
+        empty = np.zeros((10, 10, 10), dtype=np.int32)
+        path = str(tmp_path / "empty.nii.gz")
+        nib.save(nib.Nifti1Image(empty, np.eye(4)), path)
+
+        with pytest.raises(RuntimeError, match="empty"):
+            PrecomputedParcellation(path).compute(np.zeros((10, 10, 10)), np.eye(4))
+
+    def test_implements_protocol(self):
+        assert isinstance(PrecomputedParcellation("/dummy"), BrainMaskStrategy)
 
 
 class TestGetAvailableStrategies:

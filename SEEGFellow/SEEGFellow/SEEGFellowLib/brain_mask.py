@@ -278,6 +278,69 @@ class SynthSegBrainMask:
         return mask
 
 
+class PrecomputedParcellation:
+    """Load a pre-computed SynthSeg parcellation from a NIfTI file.
+
+    This strategy requires no external software — it simply reads an existing
+    parcellation label map and derives the binary brain mask (label > 0).
+
+    Args:
+        path: Path to a NIfTI parcellation file (e.g. ``synthseg_parc.nii.gz``).
+
+    Example::
+
+        strategy = PrecomputedParcellation("/data/synthseg_parc.nii.gz")
+        mask = strategy.compute(volume, affine)
+        parc = strategy.parcellation
+    """
+
+    name = "Precomputed Label Map"
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.parcellation: np.ndarray | None = None
+        self.parcellation_affine: np.ndarray | None = None
+
+    def is_available(self) -> bool:
+        """Return True if the file exists."""
+        return os.path.isfile(self.path)
+
+    def compute(
+        self,
+        volume: np.ndarray,
+        affine: np.ndarray,
+        output_dir: str | None = None,
+    ) -> np.ndarray:
+        """Load the parcellation and return a binarized brain mask.
+
+        The *volume* and *affine* arguments are accepted for protocol
+        compatibility but are not used — geometry comes from the NIfTI file.
+
+        Returns:
+            Binary uint8 mask (1 = brain, 0 = outside).
+
+        Raises:
+            RuntimeError: If the file does not exist or produces an empty mask.
+        """
+        import nibabel as nib
+
+        if not os.path.isfile(self.path):
+            raise RuntimeError(f"Label map file not found: {self.path}")
+
+        img = nib.load(self.path)
+        seg_affine = np.array(img.affine)
+        # Transpose from NIfTI (I,J,K) to Slicer's (K,J,I).
+        parcellation = np.asarray(img.dataobj, dtype=np.int32).T
+
+        self.parcellation = parcellation
+        self.parcellation_affine = seg_affine
+
+        mask = (parcellation > 0).astype(np.uint8)
+        if mask.sum() == 0:
+            raise RuntimeError("loaded brain mask is empty")
+        return mask
+
+
 def get_available_strategies() -> list[BrainMaskStrategy]:
     """Return all brain mask strategies.
 

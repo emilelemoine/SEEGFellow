@@ -66,6 +66,16 @@
        </layout>
       </item>
       <item><widget class="QPushButton" name="computeHeadMaskButton"><property name="text"><string>Compute Segmentation</string></property></widget></item>
+      <item>
+       <widget class="QLabel" name="loadLabelMapSeparator"><property name="text"><string>— or load a pre-computed label map —</string></property><property name="alignment"><set>Qt::AlignCenter</set></property></widget>
+      </item>
+      <item>
+       <layout class="QFormLayout" name="loadLabelMapFormLayout">
+        <item row="0" column="0"><widget class="QLabel"><property name="text"><string>Label map file:</string></property></widget></item>
+        <item row="0" column="1"><widget class="ctkPathLineEdit" name="labelMapPathLineEdit"><property name="nameFilters"><stringlist><string>NIfTI files (*.nii *.nii.gz)</string></stringlist></property></widget></item>
+       </layout>
+      </item>
+      <item><widget class="QPushButton" name="loadLabelMapButton"><property name="text"><string>Load Label Map</string></property></widget></item>
       <item><widget class="QPushButton" name="editHeadMaskButton"><property name="text"><string>Edit in Segment Editor</string></property></widget></item>
      </layout>
     </widget>

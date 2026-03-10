@@ -191,7 +191,7 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         t1_path = self.ui.t1PathLineEdit.currentPath
         ct_path = self.ui.ctPathLineEdit.currentPath
         if not t1_path or not ct_path:
-            slicer.util.errorDisplay("Please select both T1 and CT files.")
+            slicer.util.errorDisplay("Please select both T1 and CT inputs.")
             return
         try:
             slicer.util.showStatusMessage("Loading volumes...")
@@ -831,12 +831,47 @@ class SEEGFellowLogic(ScriptedLoadableModuleLogic):
     def load_volumes(self, t1_path: str, ct_path: str) -> None:
         """Load T1 and CT volumes from disk into the Slicer scene.
 
+        Accepts NIfTI files or DICOM folders.
+
         Example::
 
             logic.load_volumes("/data/T1.nii.gz", "/data/CT.nii.gz")
+            logic.load_volumes("/data/T1_dicom/", "/data/CT_dicom/")
         """
-        self._t1_node = slicer.util.loadVolume(t1_path)
-        self._ct_node = slicer.util.loadVolume(ct_path)
+        self._t1_node = self._load_volume(t1_path)
+        self._ct_node = self._load_volume(ct_path)
+
+    @staticmethod
+    def _load_volume(path: str):
+        """Load a volume from a file path or DICOM folder."""
+        import os
+
+        if os.path.isdir(path):
+            return SEEGFellowLogic._load_dicom_volume(path)
+        return slicer.util.loadVolume(path)
+
+    @staticmethod
+    def _load_dicom_volume(folder_path: str):
+        """Load a single scalar volume from a DICOM folder."""
+        from DICOMLib import DICOMUtils
+
+        loaded_node_ids = DICOMUtils.loadPatientByFolder(folder_path)
+        volume_nodes = [
+            slicer.mrmlScene.GetNodeByID(nid)
+            for nid in loaded_node_ids
+            if (
+                slicer.mrmlScene.GetNodeByID(nid) is not None
+                and slicer.mrmlScene.GetNodeByID(nid).IsA("vtkMRMLScalarVolumeNode")
+            )
+        ]
+        if not volume_nodes:
+            raise RuntimeError(f"No volume found in DICOM folder: {folder_path}")
+        if len(volume_nodes) > 1:
+            raise RuntimeError(
+                f"Multiple volumes found in DICOM folder: {folder_path}. "
+                "Please select a folder containing a single series."
+            )
+        return volume_nodes[0]
 
     # -------------------------------------------------------------------------
     # Step 2: Rough transform

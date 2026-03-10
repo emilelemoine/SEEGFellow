@@ -18,6 +18,16 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 
+def _ensure_nibabel() -> None:
+    """Install nibabel via Slicer's pip if it is not already available."""
+    try:
+        import nibabel  # noqa: F401
+    except ImportError:
+        import slicer
+
+        slicer.util.pip_install("nibabel")
+
+
 @runtime_checkable
 class BrainMaskStrategy(Protocol):
     """Protocol for brain mask extraction strategies.
@@ -199,6 +209,7 @@ class SynthSegBrainMask:
             strategy = SynthSegBrainMask()
             mask = strategy.compute(volume, affine, output_dir="/tmp/seeg")
         """
+        _ensure_nibabel()
         import nibabel as nib
 
         # Check for cached result in output_dir
@@ -322,6 +333,7 @@ class PrecomputedParcellation:
         Raises:
             RuntimeError: If the file does not exist or produces an empty mask.
         """
+        _ensure_nibabel()
         import nibabel as nib
 
         if not os.path.isfile(self.path):

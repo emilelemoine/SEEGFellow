@@ -1,4 +1,4 @@
-# SEEGFellow/SEEGFellow/SEEGFellowLib/brain_mask.py
+# SEEGFellow/SEEGFellowLib/brain_mask.py
 """Brain mask via FreeSurfer SynthSeg volumetric parcellation.
 
 Provides a single strategy (SynthSegBrainMask) that runs mri_synthseg --parc

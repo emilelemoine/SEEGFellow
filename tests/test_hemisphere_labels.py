@@ -1,9 +1,7 @@
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow", "SEEGFellow")
-)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow"))
 
 from SEEGFellowLib.hemisphere_labels import (
     LEFT_HEMISPHERE_LABELS as _LEFT_HEMISPHERE_LABELS,

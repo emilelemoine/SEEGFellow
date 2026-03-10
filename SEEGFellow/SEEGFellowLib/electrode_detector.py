@@ -1,4 +1,4 @@
-# SEEGFellow/SEEGFellow/SEEGFellowLib/electrode_detector.py
+# SEEGFellow/SEEGFellowLib/electrode_detector.py
 """Automated electrode detection from metal segmentation.
 
 Core algorithm functions operate on numpy arrays. The ElectrodeDetector class

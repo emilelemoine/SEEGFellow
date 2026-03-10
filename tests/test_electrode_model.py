@@ -3,9 +3,7 @@ import sys
 import os
 
 # Add the module source to the path so we can import without Slicer
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow", "SEEGFellow")
-)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow"))
 
 from SEEGFellowLib.electrode_model import Contact, Electrode, ElectrodeParams
 

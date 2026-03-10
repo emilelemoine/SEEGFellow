@@ -1,4 +1,4 @@
-# SEEGFellow/SEEGFellow/SEEGFellowLib/contact_segmenter.py
+# SEEGFellow/SEEGFellowLib/contact_segmenter.py
 """Creates a Slicer segmentation with per-contact cylindrical segments.
 
 Example (in Slicer Python console)::

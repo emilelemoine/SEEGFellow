@@ -1,10 +1,24 @@
-cmake_minimum_required(VERSION 3.16.3...3.19.7 FATAL_ERROR)
-project(SEEGFellow)
+set(MODULE_NAME SEEGFellow)
 
-find_package(Slicer REQUIRED)
-include(${Slicer_USE_FILE})
+set(MODULE_PYTHON_SCRIPTS
+  ${MODULE_NAME}.py
+  ${MODULE_NAME}Lib/__init__.py
+  ${MODULE_NAME}Lib/electrode_model.py
+  ${MODULE_NAME}Lib/registration.py
+  ${MODULE_NAME}Lib/metal_segmenter.py
+  ${MODULE_NAME}Lib/electrode_detector.py
+  ${MODULE_NAME}Lib/trajectory_detector.py
+  ${MODULE_NAME}Lib/contact_segmenter.py
+  )
 
-add_subdirectory(SEEGFellow)
+set(MODULE_PYTHON_RESOURCES
+  Resources/Icons/${MODULE_NAME}.png
+  Resources/UI/${MODULE_NAME}.ui
+  )
 
-include(${Slicer_EXTENSION_GENERATE_CONFIG})
-include(${Slicer_EXTENSION_CPACK})
+slicerMacroBuildScriptedModule(
+  NAME ${MODULE_NAME}
+  SCRIPTS ${MODULE_PYTHON_SCRIPTS}
+  RESOURCES ${MODULE_PYTHON_RESOURCES}
+  WITH_GENERIC_TESTS
+  )

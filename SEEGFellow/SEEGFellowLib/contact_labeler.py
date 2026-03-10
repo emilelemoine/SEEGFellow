@@ -1,4 +1,4 @@
-# SEEGFellow/SEEGFellow/SEEGFellowLib/contact_labeler.py
+# SEEGFellow/SEEGFellowLib/contact_labeler.py
 """Map electrode contact positions to anatomical regions via SynthSeg parcellation.
 
 Uses the FreeSurfer SynthSeg label lookup table (DKT atlas) to convert integer

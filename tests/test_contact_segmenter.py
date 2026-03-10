@@ -2,9 +2,7 @@
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow", "SEEGFellow")
-)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow"))
 
 import numpy as np
 from SEEGFellowLib.contact_segmenter import generate_cylinder_mask

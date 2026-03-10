@@ -2,9 +2,7 @@
 import sys
 import os
 
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow", "SEEGFellow")
-)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "SEEGFellow"))
 
 from unittest.mock import MagicMock, patch
 import numpy as np

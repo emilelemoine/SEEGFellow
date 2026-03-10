@@ -1,4 +1,4 @@
-# SEEGFellow/SEEGFellow/SEEGFellowLib/trajectory_detector.py
+# SEEGFellow/SEEGFellowLib/trajectory_detector.py
 """Single-electrode detection from a seed point (manual fallback).
 
 Core functions operate on numpy arrays. The IntensityProfileDetector class

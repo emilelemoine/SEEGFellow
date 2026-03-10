@@ -1,4 +1,4 @@
-# SEEGFellow/SEEGFellow/SEEGFellowLib/metal_segmenter.py
+# SEEGFellow/SEEGFellowLib/metal_segmenter.py
 """Metal segmentation from CT volume.
 
 Core algorithm functions operate on numpy arrays for testability.

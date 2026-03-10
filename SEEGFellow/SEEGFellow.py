@@ -45,11 +45,15 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui = slicer.util.childWidgetVariables(uiWidget)
 
         self.logic = SEEGFellowLogic()
-        # Step 1: Load Data — accept both files and directories (DICOM)
+        # Step 1: Load Data — DICOM checkbox toggles file vs directory mode
         import ctk
 
-        for w in (self.ui.t1PathLineEdit, self.ui.ctPathLineEdit):
-            w.filters = ctk.ctkPathLineEdit.Files | ctk.ctkPathLineEdit.Dirs
+        self.ui.t1DicomCheckBox.toggled.connect(
+            lambda on: self._set_path_dicom_mode(self.ui.t1PathLineEdit, on)
+        )
+        self.ui.ctDicomCheckBox.toggled.connect(
+            lambda on: self._set_path_dicom_mode(self.ui.ctPathLineEdit, on)
+        )
         self.ui.loadButton.clicked.connect(self._on_load_clicked)
 
         # Step 2: Co-registration
@@ -190,6 +194,15 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
     # -------------------------------------------------------------------------
     # Step 1: Load Data
     # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _set_path_dicom_mode(path_widget, dicom: bool):
+        """Switch a ctkPathLineEdit between file and directory selection."""
+        import ctk
+
+        path_widget.filters = (
+            ctk.ctkPathLineEdit.Dirs if dicom else ctk.ctkPathLineEdit.Files
+        )
 
     def _on_load_clicked(self):
         t1_path = self.ui.t1PathLineEdit.currentPath

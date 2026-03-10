@@ -45,7 +45,11 @@ class SEEGFellowWidget(ScriptedLoadableModuleWidget):
         self.ui = slicer.util.childWidgetVariables(uiWidget)
 
         self.logic = SEEGFellowLogic()
-        # Step 1: Load Data
+        # Step 1: Load Data — accept both files and directories (DICOM)
+        import ctk
+
+        for w in (self.ui.t1PathLineEdit, self.ui.ctPathLineEdit):
+            w.filters = ctk.ctkPathLineEdit.Files | ctk.ctkPathLineEdit.Dirs
         self.ui.loadButton.clicked.connect(self._on_load_clicked)
 
         # Step 2: Co-registration

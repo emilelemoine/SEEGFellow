@@ -10,9 +10,9 @@
      <property name="text"><string>Step 1: Load Data</string></property>
      <layout class="QFormLayout" name="loadDataFormLayout">
       <item row="0" column="0"><widget class="QLabel"><property name="text"><string>T1 MRI:</string></property></widget></item>
-      <item row="0" column="1"><widget class="ctkPathLineEdit" name="t1PathLineEdit"><property name="filters"><set>ctkPathLineEdit::Files|ctkPathLineEdit::Dirs</set></property><property name="toolTip"><string>NIfTI file or DICOM folder</string></property></widget></item>
+      <item row="0" column="1"><widget class="ctkPathLineEdit" name="t1PathLineEdit"><property name="toolTip"><string>NIfTI file or DICOM folder</string></property></widget></item>
       <item row="1" column="0"><widget class="QLabel"><property name="text"><string>Post-implant CT:</string></property></widget></item>
-      <item row="1" column="1"><widget class="ctkPathLineEdit" name="ctPathLineEdit"><property name="filters"><set>ctkPathLineEdit::Files|ctkPathLineEdit::Dirs</set></property><property name="toolTip"><string>NIfTI file or DICOM folder</string></property></widget></item>
+      <item row="1" column="1"><widget class="ctkPathLineEdit" name="ctPathLineEdit"><property name="toolTip"><string>NIfTI file or DICOM folder</string></property></widget></item>
       <item row="2" column="1"><widget class="QPushButton" name="loadButton"><property name="text"><string>Load Volumes</string></property></widget></item>
      </layout>
     </widget>
